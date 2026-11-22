@@ -81,6 +81,14 @@ final class NavigationHistory: ObservableObject {
         store.tabs(from: id, limit: limit, backward: backward)
     }
 
+    func openedFiles(endingAt id: Int) -> [Tab] {
+        let page = tabPage(starting: id, backward: true)
+        // Deleting the last row of the oldest page leaves the view's anchor
+        // below every surviving ID. Show the nearest remaining page.
+        if page.isEmpty && tabCount > 0 { return tabPage(starting: id).reversed() }
+        return page
+    }
+
     func tab(id: Int) -> Tab? {
         guard let tab = store.tabs(from: id, limit: 1).first, tab.id == id else { return nil }
         return tab

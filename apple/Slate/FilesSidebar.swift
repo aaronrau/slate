@@ -220,7 +220,7 @@ private struct OpenedFiles: View {
                     .contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityValue(expanded ? "Expanded" : "Collapsed")
             if expanded {
-                let page = history.tabPage(starting: oldest, backward: true)
+                let page = history.openedFiles(endingAt: oldest)
                 ForEach(page) { tab in
                     Button { select(tab) } label: {
                         Label(tab.name, systemImage: "doc.text").lineLimit(1)

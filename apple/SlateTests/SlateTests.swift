@@ -328,6 +328,12 @@ final class SlateTests: XCTestCase {
         }
         XCTAssertEqual(visible.count, expected.count)
         XCTAssertEqual(Set(visible), expected)
+
+        let oldest = try XCTUnwrap(history.tabPage(starting: 0, limit: 1).first)
+        try history.remove(FileDeletion(ScopedURL(URL(fileURLWithPath: oldest.path))))
+        let nearest = history.tabPage(starting: oldest.id + 1)
+        XCTAssertFalse(nearest.isEmpty)
+        XCTAssertEqual(history.openedFiles(endingAt: oldest.id).map(\.id), nearest.reversed().map(\.id))
     }
 
     @MainActor
