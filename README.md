@@ -60,7 +60,7 @@ sh packaging/install-mermaid.sh
 
 Right-click a selection for the edit menu. Use Command for the primary shortcuts on macOS. In the sidebar, press Enter to open the first search result or click a result to select it. Content hits select the matching bytes. Escape in the search field clears the query and restores the directory tree. Use the refresh button to pick up filesystem changes.
 
-Click the arrows on the tab strip to retrace your file visits, or click a filename to jump directly to that tab. Opening another file after going back starts a new forward path. The GTK edition remembers history across launches for each workspace. It stores paths and positions in a local SQLite database and loads a small group of adjacent tab buttons. History has no preset visit limit.
+Click or tap **←** to reopen the previous file and **→** to move forward. Select a filename tab to jump directly to it. Opening a different file after going back starts a new forward path. The apps store file references and positions in SQLite and reopen files on demand. History survives restarts and has no preset visit limit. On GTK, history belongs to each workspace. If two windows open the same workspace simultaneously, the second keeps its own temporary history.
 
 Open **Edit → Appearance…** with **Ctrl+,** on Linux or **Command+,** on macOS. Choose Dark or Light and adjust the document background, panels, text, secondary text, accents, or code color. Changes preview immediately. **Save** remembers the colors for each mode, and **Cancel** restores the previous appearance.
 

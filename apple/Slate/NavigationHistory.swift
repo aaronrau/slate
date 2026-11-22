@@ -48,84 +48,87 @@ final class FileReference: Codable {
 final class NavigationHistory: ObservableObject {
     struct Tab: Identifiable {
         let id: Int
-        var reference: FileReference
-        var caret: UInt64 = 0
-        var preview = false
-        var name: String { reference.url.lastPathComponent }
+        let path: String
+        let caret: UInt64
+        let preview: Bool
+        var name: String { (path as NSString).lastPathComponent }
     }
-    private(set) var tabs: [Tab] = []
-    private var tabIDs: [URL: Int] = [:]
-    // Visits stay indexed in SQLite. The array is used only for an in-memory session.
-    private var volatileVisits: [Int] = []
-    private var last = -1
+    static let stripSize = 32
+    private let store: HistoryStore
+    private(set) var visibleTabs: [Tab] = []
+    private(set) var tabCount: Int
+    private(set) var position: Int
     private(set) var active: Int?
-    private var position = -1
-
-    private let store: HistoryStore?
+    private var stripStart = 0
+    private(set) var back: Int?
+    private(set) var forward: Int?
 
     init(store: HistoryStore? = nil) {
-        self.store = store
-        if let store {
-            let restored = store.load()
-            (tabs, last, position) = (restored.0, restored.1, restored.2)
-            if restored.3, let id = store.tabID(at: position), tabs.indices.contains(id) { active = id }
-            for tab in tabs { tabIDs[tab.reference.url.standardizedFileURL] = tab.id }
-        }
+        self.store = store ?? .inMemory()
+        tabCount = self.store.tabCount
+        position = self.store.position
+        active = self.store.showing ? self.store.tabID(at: position) : nil
+        loadStrip(containing: active ?? 0)
+        updateArrows()
     }
 
-    var currentVisit: Int? { active != nil ? position : nil }
-    var back: Int? { active != nil ? (position > 0 ? position - 1 : nil) : (position >= 0 ? position : nil) }
-    var forward: Int? { active != nil && position < last ? position + 1 : nil }
+    var currentVisit: Int? { active == nil ? nil : position }
     func tab(atVisit visit: Int) -> Tab? {
-        let id = store?.tabID(at: visit) ?? (volatileVisits.indices.contains(visit) ? volatileVisits[visit] : nil)
-        guard let id, tabs.indices.contains(id) else { return nil }
-        return tabs[id]
+        guard let id = store.tabID(at: visit) else { return nil }
+        return tab(id: id)
+    }
+    func tab(id: Int) -> Tab? {
+        guard let tab = store.tabs(from: id, limit: 1).first, tab.id == id else { return nil }
+        return tab
+    }
+    func acquire(_ tab: Tab) throws -> ScopedURL {
+        guard let reference = store.file(for: tab.id) else { throw EditorFailure("Cannot read the saved location of “\(tab.name)”.") }
+        return try reference.acquire()
     }
 
+    var hasEarlierTabs: Bool { stripStart > 0 }
+    var hasLaterTabs: Bool { stripStart + Self.stripSize < tabCount }
+    func shiftStrip(forward: Bool) {
+        objectWillChange.send()
+        loadStrip(containing: min(tabCount - 1, max(0, stripStart + (forward ? Self.stripSize : -Self.stripSize))))
+    }
+    private func loadStrip(containing id: Int) {
+        stripStart = max(0, id / Self.stripSize * Self.stripSize)
+        visibleTabs = store.tabs(from: stripStart, limit: Self.stripSize)
+    }
+    private func updateArrows() {
+        back = store.visit(starting: position - (active == nil ? 0 : 1), backward: true)
+        forward = active == nil ? nil : store.visit(starting: position + 1, backward: false)
+    }
+
+    func markUnavailable(_ id: Int) {
+        objectWillChange.send()
+        store.markUnavailable(id)
+        updateArrows()
+    }
+    func nextAvailable(after visit: Int, backward: Bool) -> Int? {
+        store.visit(starting: visit + (backward ? -1 : 1), backward: backward)
+    }
     func remember(caret: UInt64, preview: Bool) {
-        guard let active else { return }
-        tabs[active].caret = caret
-        tabs[active].preview = preview
-        store?.remember(tabs[active])
+        if let active { store.remember(active, caret: caret, preview: preview) }
     }
-
     func leaveFile() {
         objectWillChange.send()
         active = nil
-        store?.setPosition(position, showing: false)
+        store.setPosition(position, showing: false)
+        updateArrows()
     }
 
-    func record(_ file: ScopedURL, at visit: Int? = nil) {
-        let key = file.url.standardizedFileURL
+    func record(_ file: ScopedURL, at visit: Int? = nil) throws {
+        let id = visit.flatMap { store.tabID(at: $0) } ?? store.tabID(path: file.url.standardizedFileURL.path) ?? tabCount
+        let append = visit == nil && active != id
+        let next = visit ?? (append ? position + 1 : position)
+        try store.record(file: file, id: id, position: next, appended: append)
         objectWillChange.send()
-        if let visit {
-            guard let id = tab(atVisit: visit)?.id else { return }
-            position = visit
-            active = id
-            tabs[id].reference = file.reference
-            tabIDs[key] = id
-            store?.record(tab: tabs[id], position: position, appended: false)
-            return
-        }
-        let id: Int
-        if let existing = tabIDs[key] {
-            id = existing
-            tabs[id].reference = file.reference
-        } else {
-            id = tabs.count
-            tabs.append(Tab(id: id, reference: file.reference))
-            tabIDs[key] = id
-        }
-        let appended = active != id
-        if appended {
-            position += 1
-            last = position
-            if store == nil {
-                volatileVisits.removeSubrange(position..<volatileVisits.count)
-                volatileVisits.append(id)
-            }
-        }
         active = id
-        store?.record(tab: tabs[id], position: position, appended: appended)
+        position = next
+        tabCount = max(tabCount, id + 1)
+        loadStrip(containing: id)
+        updateArrows()
     }
 }

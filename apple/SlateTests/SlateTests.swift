@@ -1,5 +1,6 @@
 import XCTest
 import WebKit
+import SQLite3
 @testable import Slate
 
 final class SlateTests: XCTestCase {
@@ -47,19 +48,62 @@ final class SlateTests: XCTestCase {
             try Data().write(to: url)
             return ScopedURL(url)
         }
-        for index in [0, 1, 0, 1] { history.record(files[index]) }
+        for index in [0, 1, 0, 1] { try history.record(files[index]) }
         let prior = try XCTUnwrap(history.back)
-        history.record(files[0], at: prior)
+        try history.record(files[0], at: prior)
         XCTAssertEqual(history.tab(atVisit: try XCTUnwrap(history.forward))?.name, "b")
-        history.record(files[2])
+        try history.record(files[2])
         history.remember(caret: 4099, preview: true)
         XCTAssertNil(history.forward)
         let restored = NavigationHistory(store: try XCTUnwrap(HistoryStore(url: database)))
-        XCTAssertEqual(restored.tabs.map(\.name), ["a", "b", "c"])
+        XCTAssertEqual(restored.visibleTabs.map(\.name), ["a", "b", "c"])
         let current = try XCTUnwrap(restored.active)
-        XCTAssertEqual(restored.tabs[current].caret, 4099)
-        XCTAssertTrue(restored.tabs[current].preview)
+        XCTAssertEqual(restored.tab(id: current)?.caret, 4099)
+        XCTAssertEqual(restored.tab(id: current)?.preview, true)
         XCTAssertEqual(restored.tab(atVisit: try XCTUnwrap(restored.back))?.name, "a")
+    }
+
+    func testLargeHistoryRestoresOnlyTheVisibleLabelsAndMigratesOldBookmarks() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let database = dir.appendingPathComponent("legacy.sqlite")
+        var raw: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(database.path, &raw), SQLITE_OK)
+        let seed = """
+            CREATE TABLE tabs(id INTEGER PRIMARY KEY, file BLOB NOT NULL, caret INTEGER DEFAULT 0, preview INTEGER DEFAULT 0);
+            CREATE TABLE visits(position INTEGER PRIMARY KEY, tab INTEGER NOT NULL);
+            CREATE TABLE state(id INTEGER PRIMARY KEY, position INTEGER NOT NULL, showing INTEGER NOT NULL);
+            WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i<10239)
+            INSERT INTO tabs(id,file,caret) SELECT i,CAST('{"url":"file:///tmp/note-' || i || '.txt"}' AS BLOB),i FROM n;
+            INSERT INTO visits SELECT id,id FROM tabs;
+            INSERT INTO state VALUES(1,5021,1);
+            """
+        XCTAssertEqual(sqlite3_exec(raw, seed, nil, nil, nil), SQLITE_OK)
+        sqlite3_close(raw)
+
+        let store = try XCTUnwrap(HistoryStore(url: database))
+        // A damaged, unrelated bookmark must never be decoded to construct the strip.
+        XCTAssertEqual(sqlite3_open(database.path, &raw), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(raw, "UPDATE tabs SET file=x'ff' WHERE id=5020", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(raw)
+        let history = NavigationHistory(store: store)
+        XCTAssertEqual(history.tabCount, 10240)
+        XCTAssertEqual(history.visibleTabs.count, NavigationHistory.stripSize)
+        XCTAssertEqual(history.active, 5021)
+        let saved = try XCTUnwrap(history.tab(atVisit: 5021))
+        XCTAssertEqual(try history.acquire(saved).url.lastPathComponent, "note-5021.txt")
+        XCTAssertEqual(saved.caret, 5021)
+        let damaged = try XCTUnwrap(history.tab(atVisit: 5020))
+        XCTAssertEqual(damaged.name, "note-5020.txt")
+        XCTAssertThrowsError(try history.acquire(damaged))
+        history.markUnavailable(damaged.id)
+        XCTAssertEqual(history.back, 5019)
+        history.shiftStrip(forward: true)
+        XCTAssertEqual(history.visibleTabs.first?.id, 5024)
+        XCTAssertTrue(history.hasEarlierTabs && history.hasLaterTabs)
+        history.shiftStrip(forward: false)
+        XCTAssertTrue(history.visibleTabs.contains { $0.id == 5021 })
     }
 
     @MainActor
@@ -121,6 +165,26 @@ final class SlateTests: XCTestCase {
         model.navigate(visit: visit)
         try await waitUntil { !model.busy }
         XCTAssertEqual(model.file?.url.standardizedFileURL, second.standardizedFileURL)
+    }
+
+    @MainActor
+    func testBackSkipsUnavailableFileAndKeepsItsTab() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let urls = ["first", "gone", "last"].map { dir.appendingPathComponent($0) }
+        let model = EditorModel(history: NavigationHistory())
+        for url in urls {
+            try Data("text".utf8).write(to: url)
+            model.open(url)
+            try await waitUntil { !model.busy }
+        }
+        try FileManager.default.removeItem(at: urls[1])
+        model.navigate(visit: try XCTUnwrap(model.history.back))
+        try await waitUntil { !model.busy && model.file?.url.lastPathComponent == "first" }
+        XCTAssertEqual(model.history.visibleTabs.map(\.name), ["first", "gone", "last"])
+        model.navigate(visit: try XCTUnwrap(model.history.forward))
+        try await waitUntil { !model.busy && model.file?.url.lastPathComponent == "last" }
     }
 
     @MainActor

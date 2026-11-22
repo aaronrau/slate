@@ -101,18 +101,40 @@ final class EditorModel: ObservableObject {
     }
 
     func navigate(visit: Int) {
-        if let tab = history.tab(atVisit: visit) { showTab(tab, visit: visit) }
+        protectChanges { [self] in reopen(visit: visit, backward: visit <= history.position) }
     }
 
-    func showTab(_ tab: NavigationHistory.Tab, visit: Int? = nil) {
-        guard visit != nil || history.active != tab.id else { return }
+    func showTab(_ tab: NavigationHistory.Tab) {
+        guard history.active != tab.id else { return }
         protectChanges { [self] in
-            do { load(try tab.reference.acquire(), offset: tab.caret, visit: visit, previewMode: tab.preview) }
-            catch { errorMessage = error.localizedDescription }
+            // The strip only retains label metadata. Read the latest saved caret
+            // when opening a tab, including after a background transition.
+            if let tab = history.tab(id: tab.id) { reopen(tab: tab, visit: nil, backward: true) }
         }
     }
 
-    private func load(_ access: ScopedURL, offset: UInt64? = nil, length: Int = 0, visit: Int? = nil, previewMode: Bool? = nil) {
+    private func reopen(visit: Int, backward: Bool) {
+        if let tab = history.tab(atVisit: visit) { reopen(tab: tab, visit: visit, backward: backward) }
+    }
+
+    private func reopen(tab: NavigationHistory.Tab, visit: Int?, backward: Bool) {
+        let onFailure: (Error) -> Void = { [self] error in
+            history.markUnavailable(tab.id)
+            if let visit, let next = history.nextAvailable(after: visit, backward: backward) {
+                DispatchQueue.main.async { self.reopen(visit: next, backward: backward) }
+            } else {
+                if file == nil { history.leaveFile() }
+                errorMessage = "Could not reopen “\(tab.name)”. \(error.localizedDescription)"
+            }
+        }
+        do {
+            let access = try history.acquire(tab)
+            load(access, offset: tab.caret, visit: visit, previewMode: tab.preview, onFailure: onFailure)
+        } catch { onFailure(error) }
+    }
+
+    private func load(_ access: ScopedURL, offset: UInt64? = nil, length: Int = 0, visit: Int? = nil,
+                      previewMode: Bool? = nil, onFailure: ((Error) -> Void)? = nil) {
         rememberPosition()
         busy = true
         DispatchQueue.global(qos: .userInitiated).async {
@@ -130,13 +152,16 @@ final class EditorModel: ObservableObject {
                 do {
                     let (opened, rev, page) = try result.get()
                     self.install(opened, file: access, revision: rev, page: page)
-                    self.history.record(access, at: visit)
+                    do { try self.history.record(access, at: visit) }
+                    catch { self.errorMessage = error.localizedDescription }
                     if let offset {
                         self.selection = page.selection(at: offset, length: length)
                         self.preview = (previewMode ?? false) && self.markdown && page.isUTF8
                     }
                     self.rememberPosition()
-                } catch { self.errorMessage = error.localizedDescription }
+                } catch {
+                    if let onFailure { onFailure(error) } else { self.errorMessage = error.localizedDescription }
+                }
             }
         }
     }
@@ -218,7 +243,8 @@ final class EditorModel: ObservableObject {
                         self.revision = try result.get()
                         self.document = snapshot
                         self.file = target
-                        self.history.record(target)
+                        do { try self.history.record(target) }
+                        catch { self.errorMessage = error.localizedDescription }
                         self.dirty = false
                         onSaved()
                     } catch { self.errorMessage = error.localizedDescription }

@@ -204,22 +204,31 @@ struct TabStrip: View {
         HStack(spacing: 0) {
             arrow("chevron.backward", "Go back", history.back)
             arrow("chevron.forward", "Go forward", history.forward)
+            if history.hasEarlierTabs { stripButton(forward: false) }
             ScrollViewReader { scroll in
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(spacing: 0) {
                         if history.active == nil { tab("Untitled", selected: true).id(-1) }
-                        ForEach(history.tabs) { item in
+                        ForEach(history.visibleTabs) { item in
                             Button { model.showTab(item) } label: { tab(item.name, selected: history.active == item.id) }
-                                .id(item.id).buttonStyle(.plain).help(item.reference.url.path)
+                                .id(item.id).buttonStyle(.plain).help(item.path)
                                 .accessibilityAddTraits(history.active == item.id ? .isSelected : [])
                         }
                     }
                 }
                 .onChange(of: history.active) { id in scroll.scrollTo(id ?? -1, anchor: .center) }
             }
+            if history.hasLaterTabs { stripButton(forward: true) }
         }
         .frame(height: 40)
         .background(appearance.color(.surface))
+    }
+
+    private func stripButton(forward: Bool) -> some View {
+        let label = forward ? "Show next group of tabs" : "Show previous group of tabs"
+        return Button { history.shiftStrip(forward: forward) } label: {
+            Image(systemName: forward ? "chevron.right.2" : "chevron.left.2").frame(width: 28, height: 38)
+        }.buttonStyle(.plain).accessibilityLabel(label).help(label)
     }
 
     private func arrow(_ symbol: String, _ label: String, _ visit: Int?) -> some View {
