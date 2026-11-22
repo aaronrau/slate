@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>Slate</title>
+  <rect x="5" y="5" width="118" height="118" rx="25"
+        fill="#090909" stroke="#363636" stroke-width="2"/>
+  <path fill="#f4f4f2" d="M100 25 87 44H62L51 56 84 62 91 71 67 97 28 103
+                         41 84H60L71 72 38 66 31 57 55 31Z"/>
+</svg>

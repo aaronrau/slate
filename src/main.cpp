@@ -1,5 +1,6 @@
 #include "document.hpp"
 #include "editor_view.hpp"
+#include "file_history.hpp"
 #include "markdown_preview.hpp"
 #include "theme.hpp"
 #include "workspace.hpp"
@@ -65,9 +66,19 @@ bool markdown(const fs::path& path) {
     return ext == ".md" || ext == ".markdown";
 }
 
+fs::path history_database(const fs::path& workspace) {
+    fs::path directory = fs::path(g_get_user_data_dir()) / "slate" / "history";
+    if (g_mkdir_with_parents(directory.c_str(), 0700) != 0) return {};
+    auto* digest = g_compute_checksum_for_string(G_CHECKSUM_SHA256, workspace.c_str(), -1);
+    auto database = directory / (std::string(digest) + ".sqlite3");
+    g_free(digest);
+    return database;
+}
+
 class Window {
     enum class Edit { undo, redo, cut, copy, paste, select_all, count };
     fs::path root_;
+    FileHistory history_;
     Appearance appearance_;
     Document document_;
     EditorView editor_;
@@ -81,7 +92,17 @@ class Window {
     GtkWidget* preview_item_ = nullptr;
     GtkWidget* sidebar_item_ = nullptr;
     std::array<GtkWidget*, static_cast<size_t>(Edit::count)> edit_items_{};
-    GtkWidget* tab_ = nullptr;
+    struct TabButton {
+        GtkWidget* button = nullptr;
+        GtkWidget* title = nullptr;
+        GtkWidget* dot = nullptr;
+    };
+    std::array<TabButton, 5> tabs_;
+    std::vector<HistoryFile> visible_tabs_;
+    GtkWidget* back_ = nullptr;
+    GtkWidget* forward_ = nullptr;
+    GtkWidget* back_item_ = nullptr;
+    GtkWidget* forward_item_ = nullptr;
     GtkWidget* location_ = nullptr;
     GtkWidget* syntax_ = nullptr;
     GtkWidget* position_ = nullptr;
@@ -144,7 +165,7 @@ class Window {
         const bool changed = document_.dirty();
         gtk_label_set_text(GTK_LABEL(state_), saving_ ? "Saving…" :
             changed ? "Modified" : (document_.path().empty() ? "New document" : "Saved"));
-        gtk_widget_set_visible(dot_, changed);
+        if (dot_) gtk_widget_set_visible(dot_, changed);
         std::string info;
         if (!in_preview()) {
             info = "Byte " + std::to_string(editor_.cursor()) + "   ·   ";
@@ -158,8 +179,25 @@ class Window {
     void update_file() {
         auto file = document_.path();
         auto name = file.empty() ? std::string("Untitled") : display_name(file.filename());
-        gtk_label_set_text(GTK_LABEL(tab_), name.c_str());
-        gtk_widget_set_tooltip_text(tab_, file.empty() ? nullptr : display_name(file).c_str());
+        visible_tabs_ = history_.nearby_tabs();
+        dot_ = nullptr;
+        for (size_t i = 0; i < tabs_.size(); ++i) {
+            auto& tab = tabs_[i];
+            bool visible = i < visible_tabs_.size();
+            gtk_widget_set_visible(tab.button, visible);
+            if (!visible) continue;
+            const auto& path = visible_tabs_[i].path;
+            bool active = file == path;
+            auto title = path.empty() ? std::string("Untitled") : display_name(path.filename());
+            gtk_label_set_text(GTK_LABEL(tab.title), title.c_str());
+            gtk_widget_set_tooltip_text(tab.button, path.empty() ? "Untitled" : display_name(path).c_str());
+            gtk_widget_set_name(tab.button, active ? "active-tab" : "file-tab");
+            gtk_widget_set_visible(tab.dot, active && document_.dirty());
+            if (active) dot_ = tab.dot;
+        }
+        bool back = history_.previous().has_value(), forward = history_.next().has_value();
+        for (auto* widget : {back_, back_item_}) gtk_widget_set_sensitive(widget, back);
+        for (auto* widget : {forward_, forward_item_}) gtk_widget_set_sensitive(widget, forward);
         fs::path parent = file.empty() ? fs::path{} : file.parent_path().lexically_relative(root_);
         gtk_label_set_text(GTK_LABEL(location_), parent == "." ? "" : display_name(parent).c_str());
         bool md = markdown(file);
@@ -215,12 +253,13 @@ class Window {
             const auto previous_path = document_.path();
             document_ = save_job_.get();
             gtk_widget_queue_draw(editor_.widget());
-            update_file();
             if (previous_path != document_.path()) {
+                history_.saved_as(document_.path());
                 const bool is_markdown = markdown(document_.path());
                 if (in_preview() || markdown(previous_path) != is_markdown)
                     set_view(is_markdown, true);
             }
+            update_file();
         } catch (const std::exception& e) {
             close_requested_ = false;
             update_status();
@@ -272,22 +311,65 @@ class Window {
     }
 
     void open_file(const fs::path& path, uint64_t offset = 0, size_t bytes = 0, bool reload = false,
-                   const std::string& fragment = {}) {
+                   const std::string& fragment = {}, std::int64_t visit = 0, bool close_tab = false) {
         if (saving_) return;
         if (!reload && path == document_.path()) {
             if (offset || bytes) editor_.jump(offset, bytes);
-            set_view(!bytes && markdown(path), false, fragment);
+            if (bytes || !fragment.empty()) set_view(!bytes && markdown(path), false, fragment);
+            else focus_document();
             return;
         }
-        with_clean_document([this, path, offset, bytes, fragment] {
+        with_clean_document([this, path, offset, bytes, fragment, visit, close_tab] {
             Document opened;
-            opened.open(path);
+            if (!path.empty()) opened.open(path);
+            auto remembered = history_.position(path);
+            history_.remember(document_.path(), editor_.cursor(), in_preview());
+            history_.visit(path, visit, close_tab);
             document_ = std::move(opened);
             editor_.reset();
-            if (offset || bytes) editor_.jump(offset, bytes);
+            auto cursor = (bytes || offset || !fragment.empty() || !remembered) ? offset : remembered->cursor;
+            if (cursor || bytes) editor_.jump(cursor, bytes);
             update_file();
-            set_view(!bytes && markdown(path), true, fragment);
+            bool preview = markdown(path) && !bytes && (!fragment.empty() || !remembered ||
+                                                        remembered->preview.value_or(true));
+            set_view(preview, true, fragment);
         });
+    }
+
+    static bool available(const fs::path& path) {
+        std::error_code error;
+        return path.empty() || fs::is_regular_file(path, error);
+    }
+
+    std::optional<HistoryFile> available_visit(bool forward) const {
+        std::int64_t from = 0;
+        while (auto dest = forward ? history_.next(from) : history_.previous(from)) {
+            if (available(dest->path)) return dest;
+            from = dest->visit;
+        }
+        return {};
+    }
+
+    void navigate(bool forward) {
+        if (auto dest = available_visit(forward)) open_file(dest->path, 0, 0, true, {}, dest->visit);
+        else error("The files in this direction are no longer available.");
+    }
+
+    std::optional<fs::path> adjacent_tab(int step) const {
+        for (int i = 0; i < static_cast<int>(visible_tabs_.size()); ++i) {
+            const int target = i + step;
+            if (visible_tabs_[i].path == document_.path() &&
+                target >= 0 && target < static_cast<int>(visible_tabs_.size()))
+                return visible_tabs_[target].path;
+        }
+        return {};
+    }
+
+    void close_tab() {
+        auto dest = adjacent_tab(-1);
+        if (!dest) dest = adjacent_tab(1);
+        if (!dest && document_.path().empty()) { request_close(); return; }
+        open_file(dest.value_or(fs::path{}), 0, 0, true, {}, 0, true);
     }
 
     void open_dialog() {
@@ -297,7 +379,10 @@ class Window {
 
     void request_close() {
         if (saving_) { close_requested_ = true; return; }
-        with_clean_document([] { gtk_main_quit(); });
+        with_clean_document([this] {
+            history_.remember(document_.path(), editor_.cursor(), in_preview());
+            gtk_main_quit();
+        });
     }
 
     void edit(Edit command) {
@@ -384,12 +469,7 @@ class Window {
 
         auto* file = submenu(bar, "_File");
         menu_item(file, "_New File", "<Primary>n", [this] {
-            with_clean_document([this] {
-                document_ = Document();
-                editor_.reset();
-                update_file();
-                set_view(false);
-            });
+            open_file({}, 0, 0, true);
         });
         menu_item(file, "_Open File…", "<Primary>o", [this] { open_dialog(); });
         menu_item(file, "Open _Folder…", "<Primary><Shift>o", [this] {
@@ -404,6 +484,7 @@ class Window {
         menu_item(file, "_Save", "<Primary>s", [this] { save(false); });
         menu_item(file, "Save _As…", "<Primary><Shift>s", [this] { save(true); });
         gtk_menu_shell_append(GTK_MENU_SHELL(file), gtk_separator_menu_item_new());
+        menu_item(file, "Close _Tab", "<Primary>F4", [this] { close_tab(); });
         menu_item(file, "_Close Window", "<Primary>w", [this] { request_close(); });
 
         auto* editing = submenu(bar, "_Edit");
@@ -441,6 +522,14 @@ class Window {
                                   [this] { set_view(!in_preview()); });
 
         auto* go = submenu(bar, "_Goto");
+        back_item_ = menu_item(go, "_Back", "<Alt>Left", [this] { navigate(false); });
+        forward_item_ = menu_item(go, "Fo_rward", "<Alt>Right", [this] { navigate(true); });
+        menu_item(go, "Previous _Tab", "<Primary>Page_Up", [this] {
+            if (auto file = adjacent_tab(-1)) open_file(*file);
+        });
+        menu_item(go, "_Next Tab", "<Primary>Page_Down", [this] {
+            if (auto file = adjacent_tab(1)) open_file(*file);
+        });
         menu_item(go, "Goto _File…", "<Primary>p", [this] { find(false); });
         return bar;
     }
@@ -450,15 +539,36 @@ class Window {
         auto* strip = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
         gtk_widget_set_name(strip, "tab-strip");
         gtk_widget_set_size_request(strip, -1, 31);
-        auto* active = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 9);
-        gtk_widget_set_name(active, "active-tab");
-        tab_ = label("", "tab-title");
-        gtk_label_set_ellipsize(GTK_LABEL(tab_), PANGO_ELLIPSIZE_MIDDLE);
-        gtk_label_set_max_width_chars(GTK_LABEL(tab_), 32);
-        gtk_box_pack_start(GTK_BOX(active), tab_, TRUE, TRUE, 0);
-        dot_ = label("●", "modified-dot");
-        gtk_box_pack_start(GTK_BOX(active), dot_, FALSE, FALSE, 0);
-        gtk_box_pack_start(GTK_BOX(strip), active, FALSE, FALSE, 0);
+        auto add_control = [&](const char* icon, const char* hint, Action action) {
+            auto* button = gtk_button_new_from_icon_name(icon, GTK_ICON_SIZE_MENU);
+            style(button, "tab-control");
+            gtk_widget_set_tooltip_text(button, hint);
+            atk_object_set_name(gtk_widget_get_accessible(button), hint);
+            gtk_box_pack_start(GTK_BOX(strip), button, FALSE, FALSE, 0);
+            connect_action(button, "clicked", [this, action = std::move(action)] { run(action); });
+            return button;
+        };
+        back_ = add_control("go-previous-symbolic", "Back (Alt+Left)", [this] { navigate(false); });
+        forward_ = add_control("go-next-symbolic", "Forward (Alt+Right)", [this] { navigate(true); });
+        for (size_t i = 0; i < tabs_.size(); ++i) {
+            auto& tab = tabs_[i];
+            tab.button = gtk_button_new();
+            auto* contents = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
+            tab.title = label("", "tab-title");
+            gtk_label_set_ellipsize(GTK_LABEL(tab.title), PANGO_ELLIPSIZE_MIDDLE);
+            gtk_label_set_max_width_chars(GTK_LABEL(tab.title), 18);
+            tab.dot = label("●", "modified-dot");
+            gtk_box_pack_start(GTK_BOX(contents), tab.title, TRUE, TRUE, 0);
+            gtk_box_pack_start(GTK_BOX(contents), tab.dot, FALSE, FALSE, 0);
+            gtk_container_add(GTK_CONTAINER(tab.button), contents);
+            gtk_box_pack_start(GTK_BOX(strip), tab.button, FALSE, FALSE, 0);
+            connect_action(tab.button, "clicked", [this, i] {
+                // open_file can resize visible_tabs_ while this signal runs.
+                auto file = visible_tabs_.at(i).path;
+                run([&] { open_file(file); });
+            });
+        }
+        add_control("window-close-symbolic", "Close current tab", [this] { close_tab(); });
         location_ = label("", "file-location");
         gtk_label_set_ellipsize(GTK_LABEL(location_), PANGO_ELLIPSIZE_START);
         gtk_label_set_xalign(GTK_LABEL(location_), 0);
@@ -506,7 +616,7 @@ class Window {
 
 public:
     explicit Window(const fs::path& root)
-        : root_(root), editor_(document_), workspace_(root) {
+        : root_(root), history_(history_database(root)), editor_(document_), workspace_(root) {
         editor_.set_palette(appearance_.palette());
         win_ = gtk_window_new(GTK_WINDOW_TOPLEVEL);
         gtk_widget_set_name(win_, "slate");
@@ -541,7 +651,16 @@ public:
     }
 
     void show(const std::optional<fs::path>& file) {
-        if (file) open_file(*file);
+        if (file) open_file(*file, 0, 0, true);
+        else {
+            auto saved = history_.current();
+            if (saved && !available(saved->path)) {
+                saved = available_visit(false);
+                if (!saved) saved = available_visit(true);
+            }
+            if (saved) open_file(saved->path, 0, 0, true, {}, saved->visit);
+            else open_file({}, 0, 0, true);
+        }
         gtk_widget_show(win_);
         focus_document();
     }
@@ -582,6 +701,8 @@ int main(int argc, char** argv) {
             std::cerr << "Slate needs a graphical session to open its window.\n";
             return 1;
         }
+        gtk_icon_theme_add_resource_path(gtk_icon_theme_get_default(), "/slate/icons");
+        gtk_window_set_default_icon_name("slate-editor");
         slate::Window window(root);
         window.show(file);
         gtk_main();

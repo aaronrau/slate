@@ -157,7 +157,11 @@ tooltip label { color: @slate_text; }
 #main-menu > menuitem:hover { background: @slate_raised; box-shadow: inset 0 -2px @slate_accent; }
 #slate paned > separator { background: @slate_border; min-width: 1px; }
 #tab-strip { background: @slate_surface; border-bottom: 1px solid @slate_border; }
-#active-tab { background: @slate_bg; border-right: 1px solid @slate_border; padding: 0 16px; }
+#file-tab, #active-tab, .tab-control { background: transparent; border: 0;
+  border-radius: 0; min-width: 0; min-height: 0; padding: 3px 9px; }
+#file-tab, #active-tab { border-right: 1px solid @slate_border; }
+#file-tab:hover, .tab-control:hover { background: @slate_raised; }
+#active-tab { background: @slate_bg; box-shadow: inset 0 -2px @slate_accent; }
 .tab-title { color: @slate_text; font-size: 12px; }
 .modified-dot { color: @slate_code; font-size: 9px; }
 .file-location { color: @slate_muted; font-size: 11px; padding: 0 12px; }

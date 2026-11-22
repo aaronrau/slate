@@ -1,0 +1,1 @@
+The preview uses the unmodified UMD browser distribution of markdown-it 15.0.3 and the browser distribution of Mermaid 12.3.0. Both are packaged for offline use. The adjacent license files accompany the distributions. [markdown-it](https://github.com/markdown-it/markdown-it) · [Mermaid](https://github.com/mermaid-js/mermaid)

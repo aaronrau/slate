@@ -1,0 +1,5 @@
+<gresources>
+  <gresource prefix="/slate/icons">
+    <file alias="256x256/apps/slate-editor.png">slate-editor.png</file>
+  </gresource>
+</gresources>

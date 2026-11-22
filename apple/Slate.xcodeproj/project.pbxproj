@@ -1,0 +1,575 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+		04EB4315C98C4DA5EC603B94 /* Appearance.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			name = "Appearance.swift";
+			path = "Slate/Appearance.swift";
+			sourceTree = SOURCE_ROOT;
+		};
+		9F7C6E99AC67991A2C0A633C /* Document.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			name = "Document.swift";
+			path = "Slate/Document.swift";
+			sourceTree = SOURCE_ROOT;
+		};
+		DBDABCAB9C4EC7523A5E038C /* EditorModel.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			name = "EditorModel.swift";
+			path = "Slate/EditorModel.swift";
+			sourceTree = SOURCE_ROOT;
+		};
+		F1D920DEA384686992B05D39 /* EditorWindow.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			name = "EditorWindow.swift";
+			path = "Slate/EditorWindow.swift";
+			sourceTree = SOURCE_ROOT;
+		};
+		B690535561ADF1B2BACBFBD4 /* HistoryStore.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			name = "HistoryStore.swift";
+			path = "Slate/HistoryStore.swift";
+			sourceTree = SOURCE_ROOT;
+		};
+		3381B8085905AE3072C471C5 /* NavigationHistory.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			name = "NavigationHistory.swift";
+			path = "Slate/NavigationHistory.swift";
+			sourceTree = SOURCE_ROOT;
+		};
+		26000CE80221DB67BF94E993 /* Preview.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			name = "Preview.swift";
+			path = "Slate/Preview.swift";
+			sourceTree = SOURCE_ROOT;
+		};
+		22CA430A6F6440A94CBEE665 /* SlateApp.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			name = "SlateApp.swift";
+			path = "Slate/SlateApp.swift";
+			sourceTree = SOURCE_ROOT;
+		};
+		3F5A343B2E944DC3FC860ED1 /* SourceView.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			name = "SourceView.swift";
+			path = "Slate/SourceView.swift";
+			sourceTree = SOURCE_ROOT;
+		};
+		B3EEA529A14C0518C79602B8 /* Workspace.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			name = "Workspace.swift";
+			path = "Slate/Workspace.swift";
+			sourceTree = SOURCE_ROOT;
+		};
+		E2BD89A8CFE8728EC6498E02 /* WorkspaceSearch.cpp */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.cpp.cpp;
+			name = "WorkspaceSearch.cpp";
+			path = "Slate/WorkspaceSearch.cpp";
+			sourceTree = SOURCE_ROOT;
+		};
+		09F60F624BB3AAC5748DA2CA /* document.cpp */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.cpp.cpp;
+			name = "document.cpp";
+			path = "../src/document.cpp";
+			sourceTree = SOURCE_ROOT;
+		};
+		85D1FE2E77B87D86547B19C0 /* search.cpp */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.cpp.cpp;
+			name = "search.cpp";
+			path = "../src/search.cpp";
+			sourceTree = SOURCE_ROOT;
+		};
+		540557B157EB5D0869B14273 /* slate_document.cpp */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.cpp.cpp;
+			name = "slate_document.cpp";
+			path = "../mobile/core/slate_document.cpp";
+			sourceTree = SOURCE_ROOT;
+		};
+		01FA6D476D346406C6FF393E /* Assets.xcassets */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = folder.assetcatalog;
+			name = "Assets.xcassets";
+			path = "Slate/Assets.xcassets";
+			sourceTree = SOURCE_ROOT;
+		};
+		E8B546A7685571D2A2C8FF1A /* preview */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = folder;
+			name = "preview";
+			path = "../mobile/preview";
+			sourceTree = SOURCE_ROOT;
+		};
+		4E5AC61AE412D217AEDC9CEB /* SlateTests.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			name = "SlateTests.swift";
+			path = "SlateTests/SlateTests.swift";
+			sourceTree = SOURCE_ROOT;
+		};
+		8407F462D0288F2B01904B8E /* Info.plist */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.plist.xml;
+			name = "Info.plist";
+			path = "Slate/Info.plist";
+			sourceTree = SOURCE_ROOT;
+		};
+		7DBFB0DAB2C1B5542EE13FDF /* Slate.entitlements */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.plist.entitlements;
+			name = "Slate.entitlements";
+			path = "Slate/Slate.entitlements";
+			sourceTree = SOURCE_ROOT;
+		};
+		D9B7346B2C5AAD67B839D0CA /* WorkspaceSearch.h */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.c.h;
+			name = "WorkspaceSearch.h";
+			path = "Slate/WorkspaceSearch.h";
+			sourceTree = SOURCE_ROOT;
+		};
+		73E4B9F2E87B8F46D4E690D7 /* Slate-Bridging-Header.h */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.c.h;
+			name = "Slate-Bridging-Header.h";
+			path = "Slate/Slate-Bridging-Header.h";
+			sourceTree = SOURCE_ROOT;
+		};
+		105E1774008702900620412B /* slate_document.h */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.c.h;
+			name = "slate_document.h";
+			path = "../mobile/core/slate_document.h";
+			sourceTree = SOURCE_ROOT;
+		};
+		2C245C75EBAD5098F6D9665D /* Slate.app */ = {
+			isa = PBXFileReference;
+			explicitFileType = wrapper.application;
+			includeInIndex = 0;
+			path = Slate.app;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		8A24395436CEBC24A6A2492D /* SlateTests.xctest */ = {
+			isa = PBXFileReference;
+			explicitFileType = wrapper.cfbundle;
+			includeInIndex = 0;
+			path = SlateTests.xctest;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		3E812CB1B98F5313CC71F316 /* Appearance.swift (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = 04EB4315C98C4DA5EC603B94 /* Appearance.swift */;
+		};
+		EB4DEEC0D8183EE66AF118D6 /* Document.swift (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = 9F7C6E99AC67991A2C0A633C /* Document.swift */;
+		};
+		F54FE5988085D533374D93EA /* EditorModel.swift (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = DBDABCAB9C4EC7523A5E038C /* EditorModel.swift */;
+		};
+		797D39AF2785D3ECDCF96E96 /* EditorWindow.swift (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = F1D920DEA384686992B05D39 /* EditorWindow.swift */;
+		};
+		ADED21509B4EBFC0282666F3 /* HistoryStore.swift (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = B690535561ADF1B2BACBFBD4 /* HistoryStore.swift */;
+		};
+		765ACA019FBE59796F32D1AC /* NavigationHistory.swift (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = 3381B8085905AE3072C471C5 /* NavigationHistory.swift */;
+		};
+		A33E3717F768575AA87D0CB5 /* Preview.swift (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = 26000CE80221DB67BF94E993 /* Preview.swift */;
+		};
+		5CE9CE738BC106DA8B11F719 /* SlateApp.swift (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = 22CA430A6F6440A94CBEE665 /* SlateApp.swift */;
+		};
+		82FAB6AD3ADF387D77DA58DF /* SourceView.swift (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = 3F5A343B2E944DC3FC860ED1 /* SourceView.swift */;
+		};
+		F0732F1C2F9934E07E064BD0 /* Workspace.swift (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = B3EEA529A14C0518C79602B8 /* Workspace.swift */;
+		};
+		DB6C34A6858DC7DDD62FCD4B /* WorkspaceSearch.cpp (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = E2BD89A8CFE8728EC6498E02 /* WorkspaceSearch.cpp */;
+		};
+		56372D7AC320345087408DAA /* document.cpp (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = 09F60F624BB3AAC5748DA2CA /* document.cpp */;
+		};
+		63863DD95B1FE9C08CE70DB6 /* search.cpp (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = 85D1FE2E77B87D86547B19C0 /* search.cpp */;
+		};
+		C394ED58E38BADD4976A62B7 /* slate_document.cpp (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = 540557B157EB5D0869B14273 /* slate_document.cpp */;
+		};
+		47CFBCB0F4235A9F4160ED2B /* Assets.xcassets (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = 01FA6D476D346406C6FF393E /* Assets.xcassets */;
+		};
+		F777B439B7B8F8D35F937008 /* preview (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = E8B546A7685571D2A2C8FF1A /* preview */;
+		};
+		0DEFAC4227B5908CC4F1B94C /* SlateTests.swift (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = 4E5AC61AE412D217AEDC9CEB /* SlateTests.swift */;
+		};
+		FE0A091FDBFB3E9C31B7A1BD /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				2C245C75EBAD5098F6D9665D /* Slate.app */,
+				8A24395436CEBC24A6A2492D /* SlateTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		2EEDE4F448FA2030D7384B82 /* Slate sources */ = {
+			isa = PBXGroup;
+			children = (
+				04EB4315C98C4DA5EC603B94 /* Appearance.swift */,
+				9F7C6E99AC67991A2C0A633C /* Document.swift */,
+				DBDABCAB9C4EC7523A5E038C /* EditorModel.swift */,
+				F1D920DEA384686992B05D39 /* EditorWindow.swift */,
+				B690535561ADF1B2BACBFBD4 /* HistoryStore.swift */,
+				3381B8085905AE3072C471C5 /* NavigationHistory.swift */,
+				26000CE80221DB67BF94E993 /* Preview.swift */,
+				22CA430A6F6440A94CBEE665 /* SlateApp.swift */,
+				3F5A343B2E944DC3FC860ED1 /* SourceView.swift */,
+				B3EEA529A14C0518C79602B8 /* Workspace.swift */,
+				E2BD89A8CFE8728EC6498E02 /* WorkspaceSearch.cpp */,
+				01FA6D476D346406C6FF393E /* Assets.xcassets */,
+				8407F462D0288F2B01904B8E /* Info.plist */,
+				7DBFB0DAB2C1B5542EE13FDF /* Slate.entitlements */,
+				D9B7346B2C5AAD67B839D0CA /* WorkspaceSearch.h */,
+				73E4B9F2E87B8F46D4E690D7 /* Slate-Bridging-Header.h */,
+			);
+			name = Slate;
+			sourceTree = "<group>";
+		};
+		50D0D8DD11A959484CB838E0 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				09F60F624BB3AAC5748DA2CA /* document.cpp */,
+				85D1FE2E77B87D86547B19C0 /* search.cpp */,
+				540557B157EB5D0869B14273 /* slate_document.cpp */,
+				E8B546A7685571D2A2C8FF1A /* preview */,
+				105E1774008702900620412B /* slate_document.h */,
+			);
+			name = "Shared core and preview";
+			sourceTree = "<group>";
+		};
+		5596E6FF2C1F9803163447CB /* Sources and products */ = {
+			isa = PBXGroup;
+			children = (
+				2EEDE4F448FA2030D7384B82 /* Slate sources */,
+				50D0D8DD11A959484CB838E0 /* Shared */,
+				4E5AC61AE412D217AEDC9CEB /* SlateTests.swift */,
+				FE0A091FDBFB3E9C31B7A1BD /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A3961AFCDDF0BA4533A1244B /* Slate Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3E812CB1B98F5313CC71F316 /* Appearance.swift (build) */,
+				EB4DEEC0D8183EE66AF118D6 /* Document.swift (build) */,
+				F54FE5988085D533374D93EA /* EditorModel.swift (build) */,
+				797D39AF2785D3ECDCF96E96 /* EditorWindow.swift (build) */,
+				ADED21509B4EBFC0282666F3 /* HistoryStore.swift (build) */,
+				765ACA019FBE59796F32D1AC /* NavigationHistory.swift (build) */,
+				A33E3717F768575AA87D0CB5 /* Preview.swift (build) */,
+				5CE9CE738BC106DA8B11F719 /* SlateApp.swift (build) */,
+				82FAB6AD3ADF387D77DA58DF /* SourceView.swift (build) */,
+				F0732F1C2F9934E07E064BD0 /* Workspace.swift (build) */,
+				DB6C34A6858DC7DDD62FCD4B /* WorkspaceSearch.cpp (build) */,
+				56372D7AC320345087408DAA /* document.cpp (build) */,
+				63863DD95B1FE9C08CE70DB6 /* search.cpp (build) */,
+				C394ED58E38BADD4976A62B7 /* slate_document.cpp (build) */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		35678F496676413DC5FBB95A /* Slate Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		471A53E125589980CF068702 /* Slate Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				47CFBCB0F4235A9F4160ED2B /* Assets.xcassets (build) */,
+				F777B439B7B8F8D35F937008 /* preview (build) */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4814D655D64E0EEE942744AA /* SlateTests Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0DEFAC4227B5908CC4F1B94C /* SlateTests.swift (build) */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2861DF4215D6CC9C80CC4F41 /* SlateTests Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		14D0DF1D565F37C0AF865870 /* SlateTests Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		413C47AB74B3B741535D0E10 /* host proxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 98F54143AB4E86B28C3AFEE0 /* project */;
+			proxyType = 1;
+			remoteGlobalIDString = 26D7B218C9B5641B37DFDDC1;
+			remoteInfo = Slate;
+		};
+		58A0DCC84F8D86FC1AFAD44D /* host dependency */ = {
+			isa = PBXTargetDependency;
+			target = 26D7B218C9B5641B37DFDDC1 /* Slate */;
+			targetProxy = 413C47AB74B3B741535D0E10 /* host proxy */;
+		};
+		26D7B218C9B5641B37DFDDC1 /* Slate */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D9F9E566E57AF0DC30B63B26 /* Slate configs */;
+			buildPhases = (
+				A3961AFCDDF0BA4533A1244B /* Slate Sources */,
+				35678F496676413DC5FBB95A /* Slate Frameworks */,
+				471A53E125589980CF068702 /* Slate Resources */,
+			);
+			buildRules = ();
+			dependencies = (
+			);
+			name = Slate;
+			productName = Slate;
+			productReference = 2C245C75EBAD5098F6D9665D /* Slate.app */;
+			productType = "com.apple.product-type.application";
+		};
+		6D7E7A3D3570C8850964D0C0 /* SlateTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C3D4288551D741FFF8B71B0C /* SlateTests configs */;
+			buildPhases = (
+				4814D655D64E0EEE942744AA /* SlateTests Sources */,
+				2861DF4215D6CC9C80CC4F41 /* SlateTests Frameworks */,
+				14D0DF1D565F37C0AF865870 /* SlateTests Resources */,
+			);
+			buildRules = ();
+			dependencies = (
+				58A0DCC84F8D86FC1AFAD44D /* host dependency */,
+			);
+			name = SlateTests;
+			productName = SlateTests;
+			productReference = 8A24395436CEBC24A6A2492D /* SlateTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		98F54143AB4E86B28C3AFEE0 /* project */ = {
+			isa = PBXProject;
+			attributes = { LastSwiftUpdateCheck = 1600; LastUpgradeCheck = 1600; BuildIndependentTargetsInParallel = 1; TargetAttributes = { 6D7E7A3D3570C8850964D0C0 = { TestTargetID = 26D7B218C9B5641B37DFDDC1; }; }; };
+			buildConfigurationList = FA52021448A4AC7DE6CD200E /* project configs */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base);
+			mainGroup = 5596E6FF2C1F9803163447CB /* Sources and products */;
+			productRefGroup = FE0A091FDBFB3E9C31B7A1BD /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				26D7B218C9B5641B37DFDDC1 /* Slate */,
+				6D7E7A3D3570C8850964D0C0 /* SlateTests */,
+			);
+		};
+		CACD8F8D7E01D03300A42FA5 /* project Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"CLANG_CXX_LANGUAGE_STANDARD" = "c++20";
+				"CLANG_ENABLE_MODULES" = "YES";
+				"CLANG_ENABLE_OBJC_ARC" = "YES";
+				"GCC_C_LANGUAGE_STANDARD" = "gnu17";
+				"SWIFT_VERSION" = "5.0";
+				"MACOSX_DEPLOYMENT_TARGET" = "14.0";
+				"IPHONEOS_DEPLOYMENT_TARGET" = "17.0";
+				"SDKROOT" = "auto";
+				"SUPPORTED_PLATFORMS" = "macosx iphoneos iphonesimulator";
+				"TARGETED_DEVICE_FAMILY" = "1,2";
+				"SUPPORTS_MACCATALYST" = "NO";
+				"ALWAYS_SEARCH_USER_PATHS" = "NO";
+				"SWIFT_OPTIMIZATION_LEVEL" = "-Onone";
+				"DEBUG_INFORMATION_FORMAT" = "dwarf";
+				"ENABLE_TESTABILITY" = "YES";
+				"ONLY_ACTIVE_ARCH" = "YES";
+				"GCC_OPTIMIZATION_LEVEL" = "0";
+			};
+			name = Debug;
+		};
+		B2C3C6A624C4C8479FDD1FBF /* project Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"CLANG_CXX_LANGUAGE_STANDARD" = "c++20";
+				"CLANG_ENABLE_MODULES" = "YES";
+				"CLANG_ENABLE_OBJC_ARC" = "YES";
+				"GCC_C_LANGUAGE_STANDARD" = "gnu17";
+				"SWIFT_VERSION" = "5.0";
+				"MACOSX_DEPLOYMENT_TARGET" = "14.0";
+				"IPHONEOS_DEPLOYMENT_TARGET" = "17.0";
+				"SDKROOT" = "auto";
+				"SUPPORTED_PLATFORMS" = "macosx iphoneos iphonesimulator";
+				"TARGETED_DEVICE_FAMILY" = "1,2";
+				"SUPPORTS_MACCATALYST" = "NO";
+				"ALWAYS_SEARCH_USER_PATHS" = "NO";
+				"SWIFT_OPTIMIZATION_LEVEL" = "-O";
+				"DEBUG_INFORMATION_FORMAT" = "dwarf-with-dsym";
+				"ENABLE_TESTABILITY" = "NO";
+				"ONLY_ACTIVE_ARCH" = "NO";
+				"GCC_OPTIMIZATION_LEVEL" = "s";
+			};
+			name = Release;
+		};
+		FA52021448A4AC7DE6CD200E /* project configs */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CACD8F8D7E01D03300A42FA5 /* project Debug */,
+				B2C3C6A624C4C8479FDD1FBF /* project Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		879C7C20E7BA7ECFDFAE896A /* Slate Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"PRODUCT_NAME" = "Slate";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "org.slateeditor.Slate";
+				"PRODUCT_MODULE_NAME" = "Slate";
+				"GENERATE_INFOPLIST_FILE" = "YES";
+				"INFOPLIST_FILE" = "Slate/Info.plist";
+				"INFOPLIST_KEY_CFBundleDisplayName" = "Slate";
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphone*]" = "YES";
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphone*]" = "YES";
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphone*]" = "YES";
+				"INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad" = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				"INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone" = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Slate/Slate.entitlements";
+				"ENABLE_HARDENED_RUNTIME[sdk=macosx*]" = "YES";
+				"CODE_SIGN_STYLE" = "Automatic";
+				"MARKETING_VERSION" = "1.0";
+				"CURRENT_PROJECT_VERSION" = "1";
+				"ASSETCATALOG_COMPILER_APPICON_NAME" = "AppIcon";
+				"SWIFT_OBJC_BRIDGING_HEADER" = "Slate/Slate-Bridging-Header.h";
+				"HEADER_SEARCH_PATHS" = "$(SRCROOT)/../mobile/core $(SRCROOT)/../src";
+				"LD_RUNPATH_SEARCH_PATHS" = "$(inherited) @executable_path/Frameworks @executable_path/../Frameworks";
+			};
+			name = Debug;
+		};
+		30364AAAF8ED65F6E0B521C2 /* Slate Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"PRODUCT_NAME" = "Slate";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "org.slateeditor.Slate";
+				"PRODUCT_MODULE_NAME" = "Slate";
+				"GENERATE_INFOPLIST_FILE" = "YES";
+				"INFOPLIST_FILE" = "Slate/Info.plist";
+				"INFOPLIST_KEY_CFBundleDisplayName" = "Slate";
+				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphone*]" = "YES";
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphone*]" = "YES";
+				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphone*]" = "YES";
+				"INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad" = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				"INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone" = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Slate/Slate.entitlements";
+				"ENABLE_HARDENED_RUNTIME[sdk=macosx*]" = "YES";
+				"CODE_SIGN_STYLE" = "Automatic";
+				"MARKETING_VERSION" = "1.0";
+				"CURRENT_PROJECT_VERSION" = "1";
+				"ASSETCATALOG_COMPILER_APPICON_NAME" = "AppIcon";
+				"SWIFT_OBJC_BRIDGING_HEADER" = "Slate/Slate-Bridging-Header.h";
+				"HEADER_SEARCH_PATHS" = "$(SRCROOT)/../mobile/core $(SRCROOT)/../src";
+				"LD_RUNPATH_SEARCH_PATHS" = "$(inherited) @executable_path/Frameworks @executable_path/../Frameworks";
+			};
+			name = Release;
+		};
+		D9F9E566E57AF0DC30B63B26 /* Slate configs */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				879C7C20E7BA7ECFDFAE896A /* Slate Debug */,
+				30364AAAF8ED65F6E0B521C2 /* Slate Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D68EBC4114DB49FCCE996862 /* SlateTests Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"PRODUCT_NAME" = "SlateTests";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "org.slateeditor.SlateTests";
+				"GENERATE_INFOPLIST_FILE" = "YES";
+				"BUNDLE_LOADER" = "$(TEST_HOST)";
+				"TEST_HOST[sdk=macosx*]" = "$(BUILT_PRODUCTS_DIR)/Slate.app/Contents/MacOS/Slate";
+				"TEST_HOST[sdk=iphone*]" = "$(BUILT_PRODUCTS_DIR)/Slate.app/Slate";
+				"HEADER_SEARCH_PATHS" = "$(SRCROOT)/../mobile/core $(SRCROOT)/../src $(SRCROOT)/Slate";
+				"LD_RUNPATH_SEARCH_PATHS" = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
+				"CODE_SIGN_STYLE" = "Automatic";
+			};
+			name = Debug;
+		};
+		4FC51086C8C7E70B82C49A10 /* SlateTests Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"PRODUCT_NAME" = "SlateTests";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "org.slateeditor.SlateTests";
+				"GENERATE_INFOPLIST_FILE" = "YES";
+				"BUNDLE_LOADER" = "$(TEST_HOST)";
+				"TEST_HOST[sdk=macosx*]" = "$(BUILT_PRODUCTS_DIR)/Slate.app/Contents/MacOS/Slate";
+				"TEST_HOST[sdk=iphone*]" = "$(BUILT_PRODUCTS_DIR)/Slate.app/Slate";
+				"HEADER_SEARCH_PATHS" = "$(SRCROOT)/../mobile/core $(SRCROOT)/../src $(SRCROOT)/Slate";
+				"LD_RUNPATH_SEARCH_PATHS" = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
+				"CODE_SIGN_STYLE" = "Automatic";
+			};
+			name = Release;
+		};
+		C3D4288551D741FFF8B71B0C /* SlateTests configs */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D68EBC4114DB49FCCE996862 /* SlateTests Debug */,
+				4FC51086C8C7E70B82C49A10 /* SlateTests Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+	};
+	rootObject = 98F54143AB4E86B28C3AFEE0 /* project */;
+}

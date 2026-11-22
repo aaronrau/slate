@@ -45,12 +45,12 @@ private:
 };
 
 struct Revision {
-    dev_t device;
-    ino_t inode;
+    decltype(std::declval<struct stat>().st_dev) device;
+    decltype(std::declval<struct stat>().st_ino) inode;
     off_t length;
     timespec modified;
     timespec changed;
-    mode_t mode;
+    decltype(std::declval<struct stat>().st_mode) mode;
 };
 
 Revision revision(const struct stat& info) {
@@ -385,6 +385,13 @@ struct Document::State {
     std::weak_ptr<EditBlock> tail;
     fs::path display_path, absolute_path, physical_path;
     bool dirty = false;
+
+    State() = default;
+    State(Descriptor fd, fs::path display, fs::path absolute = {}, fs::path physical = {})
+        : file(std::make_shared<File>(std::move(fd))), display_path(std::move(display)),
+          absolute_path(std::move(absolute)), physical_path(std::move(physical)) {
+        root = piece({}, 0, file->original.length);
+    }
 };
 
 Document::Document() : state_(std::make_unique<State>()) {}
@@ -398,13 +405,13 @@ void Document::open(const fs::path& path) {
     const auto physical = fs::canonical(absolute);
     Descriptor fd(::open(physical.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK));
     if (fd.get() < 0) fail("Open file");
-    auto next = std::make_unique<State>();
-    next->file = std::make_shared<File>(std::move(fd));
-    next->root = piece({}, 0, next->file->original.length);
-    next->display_path = path;
-    next->absolute_path = absolute;
-    next->physical_path = physical;
-    state_ = std::move(next);
+    state_ = std::make_unique<State>(std::move(fd), path, absolute, physical);
+}
+
+void Document::open_descriptor(int descriptor, const fs::path& display_name) {
+    Descriptor copy(::fcntl(descriptor, F_DUPFD_CLOEXEC, 0));
+    if (copy.get() < 0) fail("Open file descriptor");
+    state_ = std::make_unique<State>(std::move(copy), display_name);
 }
 
 Offset Document::size() const { return length(state_->root); }
@@ -417,14 +424,20 @@ std::string Document::read(Offset offset, std::size_t count) const {
     if (offset >= size() || !count) return {};
     count = static_cast<std::size_t>(std::min<Offset>(count, size() - offset));
     std::string result(count, '\0');
-    char* out = result.data();
+    read_into(offset, result.data(), count);
+    return result;
+}
+
+std::size_t Document::read_into(Offset offset, char* out, std::size_t capacity) const {
+    if (offset >= size() || !capacity) return 0;
+    const auto count = static_cast<std::size_t>(std::min<Offset>(capacity, size() - offset));
     auto append = [&](const Block& block, Offset start, Offset n) {
         if (block) std::memcpy(out, block->data() + start, n);
         else state_->file->read(start, out, n);
         out += n;
     };
     visit(state_->root, offset, count, append);
-    return result;
+    return count;
 }
 
 void Document::replace(Offset offset, Offset erase_length, std::string_view inserted) {
