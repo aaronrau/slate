@@ -3,26 +3,59 @@
   --background: #101010; --surface: #202020; --text: #e7e7e7;
   --muted: #aaa; --accent: #ccc; --border: #525252; --code: #d2d2d2;
   background: var(--background); color: var(--text);
-  font: 1rem/1.55 -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+  /* One scale: everything below is in em/rem of the app's base size. */
+  font: 1rem/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-text-size-adjust: 100%; text-size-adjust: 100%;
 }
 body { margin: 0; }
 main { max-width: 68rem; padding: 1rem 1.25rem 2rem; margin: 0 auto; overflow-wrap: anywhere; }
 main > :first-child { margin-top: 0; }
-h1,h2,h3,h4,h5,h6 { line-height: 1.2; margin: 1.4em 0 .45em; }
-p, ol, ul, pre, blockquote, .table-scroll, .diagram { margin: .75em 0; }
+h1,h2,h3,h4,h5,h6 { font-weight: 600; line-height: 1.25; margin: 1.3em 0 .5em; }
+h1 { font-size: 1.6em; }
+h2 { font-size: 1.35em; }
+h3 { font-size: 1.15em; }
+h4,h5,h6 { font-size: 1em; }
+h6 { color: var(--muted); }
+p, ol, ul, dl, pre, blockquote, .table-scroll, .diagram { margin: .7em 0; }
 ol,ul { padding-inline-start: 1.6em; }
+li + li { margin-top: .2em; }
+li > p, li > ol, li > ul { margin: .2em 0; }
 a { color: var(--accent); }
 blockquote { margin-inline: 0; padding-inline-start: 1em; border-inline-start: .2em solid var(--border); color: var(--muted); }
-hr { border: 0; border-top: 1px solid var(--border); }
-code,pre { background: var(--surface); color: var(--code); border-radius: .2rem; font-family: ui-monospace, monospace; }
+hr { border: 0; border-top: 1px solid var(--border); margin: 1.2em 0; }
+sub, sup { font-size: .75em; line-height: 0; }
+/* A family list (not bare "monospace") avoids WebKit's smaller fixed-width default size. */
+code, kbd, samp, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Roboto Mono", monospace; font-size: .92em; }
+pre code, pre kbd, pre samp { font-size: 1em; }
+code,pre { background: var(--surface); color: var(--code); border-radius: .2rem; }
 code { padding: .09em .23em; }
-pre { padding: .75em; overflow: auto; }
+pre { line-height: 1.45; padding: .75em; overflow: auto; tab-size: 4; }
 pre code { padding: 0; }
 .table-scroll { max-width: 100%; overflow-x: auto; }
-table { border-collapse: collapse; min-width: min(100%, 20em); }
+table { border-collapse: collapse; min-width: min(100%, 20em); font-size: 1em; line-height: 1.4; }
 td,th { padding: .4em .65em; border: 1px solid var(--border); text-align: start; vertical-align: top; min-width: 2.5em; }
+th { font-weight: 600; }
 th,tbody tr:nth-child(even) { background: var(--surface); }
-.diagram { overflow: auto; }
-.diagram > svg { display: block; max-width: 100%; height: auto; background: transparent; }
+.diagram { position: relative; }
+.diagram-view { overflow: auto; max-height: 70vh; }
+.diagram-view > svg { display: block; max-width: none; background: transparent; }
+.diagram-view.pannable { cursor: grab; -webkit-user-select: none; user-select: none; }
+.diagram-view.dragging { cursor: grabbing; }
+.diagram-tools {
+  position: absolute; top: .3rem; inset-inline-end: .3rem; display: flex;
+  font-size: .85rem; line-height: 1; border: 1px solid var(--border); border-radius: .35rem;
+  background: var(--surface); overflow: hidden; opacity: .6; transition: opacity .15s;
+  -webkit-user-select: none; user-select: none;
+}
+.diagram:hover .diagram-tools, .diagram-tools:focus-within { opacity: 1; }
+.diagram-tools button {
+  font: inherit; color: var(--muted); background: transparent; border: 0; margin: 0;
+  padding: .3em .45em; min-width: 2em; cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.diagram-tools button + button { border-inline-start: 1px solid var(--border); }
+.diagram-tools button:hover, .diagram-tools button:focus-visible { color: var(--text); }
+.diagram-tools button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (pointer: coarse) { .diagram-tools button { min-width: 2.6em; padding-block: .6em; } }
+@media (prefers-reduced-motion: reduce) { .diagram-tools { transition: none; } }
 img { max-width: 100%; height: auto; }
 summary { color: var(--muted); cursor: pointer; }

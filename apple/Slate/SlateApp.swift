@@ -26,6 +26,7 @@ struct SlateApp: App {
     @Environment(\.scenePhase) private var phase
     #if os(macOS)
     @AppStorage(filesVisibleKey) private var showFiles = true
+    @AppStorage(textSizeKey) private var textSize = defaultTextSize
     #endif
 
     var body: some Scene {
@@ -125,6 +126,15 @@ struct SlateApp: App {
                 Divider()
                 Toggle("Markdown Preview", isOn: $model.preview)
                     .keyboardShortcut("m", modifiers: [.command, .shift]).disabled(!model.markdown)
+                #if os(macOS)
+                Divider()
+                Button("Bigger") { textSize = min(textSize + 1, textSizeRange.upperBound) }
+                    .keyboardShortcut("=").disabled(textSize >= textSizeRange.upperBound)
+                Button("Smaller") { textSize = max(textSize - 1, textSizeRange.lowerBound) }
+                    .keyboardShortcut("-").disabled(textSize <= textSizeRange.lowerBound)
+                Button("Actual Size") { textSize = defaultTextSize }
+                    .keyboardShortcut("0").disabled(textSize == defaultTextSize)
+                #endif
             }
             CommandGroup(replacing: .appSettings) {
                 Button("Appearance…") { sheet = .appearance }.keyboardShortcut(",")

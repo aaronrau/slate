@@ -8,6 +8,7 @@ import AppKit
 struct SourceView: NSViewRepresentable {
     @ObservedObject var model: EditorModel
     @ObservedObject var appearance: Appearance
+    var textSize: Double = defaultTextSize
     func makeCoordinator() -> Coordinator { Coordinator(model) }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -21,8 +22,10 @@ struct SourceView: NSViewRepresentable {
         view.isAutomaticTextReplacementEnabled = false
         view.isAutomaticSpellingCorrectionEnabled = false
         view.isContinuousSpellCheckingEnabled = false
-        view.font = .monospacedSystemFont(ofSize: 14, weight: .regular)
-        view.textContainerInset = NSSize(width: 12, height: 14)
+        view.font = .monospacedSystemFont(ofSize: textSize, weight: .regular)
+        // With the 5 pt line fragment padding the text starts 16 pt in and 13 pt down, where the
+        // preview's text starts at the default 13 pt size, so switching views does not shift it.
+        view.textContainerInset = NSSize(width: 11, height: 13)
         view.textContainer?.widthTracksTextView = true
         view.setAccessibilityLabel("Source editor")
         view.delegate = context.coordinator
@@ -36,6 +39,7 @@ struct SourceView: NSViewRepresentable {
         scroll.backgroundColor = color
         view.textColor = NSColor(appearance.color(.text))
         view.insertionPointColor = NSColor(appearance.color(.accent))
+        if view.font?.pointSize != CGFloat(textSize) { view.font = .monospacedSystemFont(ofSize: textSize, weight: .regular) }
         view.isEditable = model.page.isUTF8 && !model.busy
         let coordinator = context.coordinator
         guard coordinator.revision != model.pageRevision else { return }
