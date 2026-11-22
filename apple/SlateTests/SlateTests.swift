@@ -368,7 +368,8 @@ final class SlateTests: XCTestCase {
         model.requestDeletion(file)
         try await waitUntil { model.deletion != nil }
         model.confirmDeletion(try XCTUnwrap(model.deletion), workspace: workspace)
-        try await waitUntil { !model.busy && !workspace.searching }
+        // The folder's rows reload on the directory queue after the deletion.
+        try await waitUntil { !model.busy && !workspace.searching && !root.busy }
         XCTAssertNil(model.errorMessage)
         XCTAssertNil(model.file)
         XCTAssertFalse(model.dirty)
