@@ -7,7 +7,11 @@ final class EditorModel: ObservableObject {
     @Published private(set) var dirty = false
     @Published private(set) var file: ScopedURL?
     @Published var preview = false
-    @Published private(set) var busy = false
+    // A file opened while busy waits in pendingOpen. Resume it here, not from a view:
+    // on a launch to open a file macOS can replace the window while a load is running.
+    @Published private(set) var busy = false {
+        didSet { if oldValue && !busy { DispatchQueue.main.async { self.resumePendingOpen() } } }
+    }
     @Published var errorMessage: String?
     @Published var confirmDiscard = false
     @Published var deletion: FileDeletion?

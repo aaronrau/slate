@@ -24,6 +24,9 @@ struct SlateApp: App {
     @StateObject private var appearance = Appearance()
     @State private var sheet: EditorSheet?
     @Environment(\.scenePhase) private var phase
+    #if os(macOS)
+    @AppStorage(filesVisibleKey) private var showFiles = true
+    #endif
 
     var body: some Scene {
         WindowGroup {
@@ -43,7 +46,6 @@ struct SlateApp: App {
                     #endif
                     model.restore()
                 }
-                .onChange(of: model.busy) { busy in if !busy { model.resumePendingOpen() } }
                 .onOpenURL { url in
                     if url.hasDirectoryPath { workspace.open(folder: url) }
                     else { model.openExternal(url) }
@@ -102,13 +104,26 @@ struct SlateApp: App {
                 Button("Save") { model.save() }.keyboardShortcut("s").disabled(model.busy)
                 Button("Save As…") { model.needsSaveAs = true }.keyboardShortcut("s", modifiers: [.command, .shift])
                     .disabled(model.busy)
+                #if os(macOS)
+                Divider()
+                Button("Show in Files") { if let file = model.file { reveal(file) } }
+                    .keyboardShortcut("r", modifiers: [.command, .shift]).disabled(model.file == nil)
+                Button("Delete File…") { if let file = model.file { model.requestDeletion(file, tabID: model.history.active) } }
+                    .disabled(model.file == nil || model.busy)
+                #endif
             }
             CommandGroup(after: .toolbar) {
+                #if os(macOS)
+                Button(showFiles ? "Hide Files" : "Show Files") { showFiles.toggle() }
+                    .keyboardShortcut("s", modifiers: [.command, .control])
+                Divider()
+                #endif
                 Button("Back") { if let visit = model.history.back { model.navigate(visit: visit) } }
                     .keyboardShortcut("[")
                 Button("Forward") { if let visit = model.history.forward { model.navigate(visit: visit) } }
                     .keyboardShortcut("]")
-                Button("Toggle Markdown Preview") { model.preview.toggle() }
+                Divider()
+                Toggle("Markdown Preview", isOn: $model.preview)
                     .keyboardShortcut("m", modifiers: [.command, .shift]).disabled(!model.markdown)
             }
             CommandGroup(replacing: .appSettings) {
@@ -137,13 +152,12 @@ struct SlateApp: App {
 
     private func finishReveal(file: URL, folder: URL) {
         let grant = ScopedURL(folder)
+        // The panel's button says Open Folder, so the chosen folder opens either way;
+        // the file is selected in it when it lies inside.
+        workspace.open(folder: grant.url)
         let root = folder.resolvingSymlinksInPath().standardizedFileURL.pathComponents
         let target = file.resolvingSymlinksInPath().standardizedFileURL
-        guard target.pathComponents.starts(with: root), target.pathComponents.count > root.count else {
-            model.errorMessage = "Choose “\(file.deletingLastPathComponent().lastPathComponent)” or a folder containing it."
-            return
-        }
-        workspace.open(folder: grant.url)
+        guard target.pathComponents.starts(with: root), target.pathComponents.count > root.count else { return }
         workspace.showInFolder(ScopedURL(file, parent: grant)) { _ in
             model.errorMessage = "The selected folder could not be read or the file has moved."
         }
@@ -232,6 +246,11 @@ final class SlateAppDelegate: NSObject, NSApplicationDelegate {
     // cold launch before the window exists: hold the latest until it appears.
     var openURL: ((URL) -> Void)? { didSet { deliver() } }
     private var pending: URL?
+
+    // One editor window: no window tabs (or their View menu items) beside the document tabs.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
 
     func application(_ application: NSApplication, open urls: [URL]) {
         guard let url = urls.last else { return }
