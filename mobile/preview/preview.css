@@ -33,7 +33,11 @@ pre { line-height: 1.45; padding: .75em; overflow: auto; tab-size: 4; }
 pre code { padding: 0; }
 .table-scroll { max-width: 100%; overflow-x: auto; }
 table { border-collapse: collapse; min-width: min(100%, 20em); font-size: 1em; line-height: 1.4; }
-td,th { padding: .4em .65em; border: 1px solid var(--border); text-align: start; vertical-align: top; min-width: 2.5em; }
+td,th { padding: .4em .65em; border: 1px solid var(--border); text-align: start; vertical-align: top; min-width: 3em; }
+/* Cells wrap between words only, so a column is never narrower than its longest word
+   (main's overflow-wrap: anywhere let the table squeeze columns to a few letters).
+   A table wider than the page scrolls in .table-scroll. */
+td,th { overflow-wrap: break-word; word-break: normal; hyphens: manual; }
 th { font-weight: 600; }
 th,tbody tr:nth-child(even) { background: var(--surface); }
 .diagram { position: relative; }
