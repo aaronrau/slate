@@ -13,6 +13,8 @@ find_package(PkgConfig REQUIRED)
 include(GNUInstallDirs)
 pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0>=3.24 pango>=1.50)
 pkg_check_modules(GLIB REQUIRED IMPORTED_TARGET glib-2.0>=2.66)
+pkg_check_modules(GIO_UNIX REQUIRED IMPORTED_TARGET gio-unix-2.0>=2.66)
+pkg_check_modules(FONTCONFIG QUIET IMPORTED_TARGET fontconfig>=2.13)
 
 add_library(md4c STATIC third_party/md4c/md4c.c third_party/md4c/entity.c)
 target_include_directories(md4c PUBLIC third_party/md4c)
@@ -28,9 +30,11 @@ target_link_libraries(slate_core PUBLIC Threads::Threads)
 
 add_library(slate_widgets src/editor_view.cpp src/workspace.cpp src/markdown_preview.cpp src/mermaid_renderer.cpp)
 target_link_libraries(slate_widgets PUBLIC slate_core slate_markdown PkgConfig::GTK)
-target_compile_definitions(slate_widgets PRIVATE
-  SLATE_MERMAID_BUILD_DATA="${CMAKE_CURRENT_SOURCE_DIR}/third_party/mermaid"
-  SLATE_MERMAID_INSTALL_DATA="${CMAKE_INSTALL_FULL_DATADIR}/slate/mermaid")
+target_link_libraries(slate_widgets PRIVATE PkgConfig::GIO_UNIX)
+if(FONTCONFIG_FOUND)
+  target_link_libraries(slate_widgets PRIVATE PkgConfig::FONTCONFIG)
+  target_compile_definitions(slate_widgets PRIVATE SLATE_HAVE_FONTCONFIG=1)
+endif()
 add_executable(slate src/main.cpp)
 target_link_libraries(slate PRIVATE slate_widgets)
 install(TARGETS slate RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
@@ -38,9 +42,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   install(FILES packaging/slate.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 endif()
 install(FILES third_party/md4c/LICENSE.md DESTINATION share/licenses/slate RENAME md4c-LICENSE.md)
-install(FILES third_party/mermaid/preview.html third_party/mermaid/preview.js third_party/mermaid/mermaid.min.js
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/slate/mermaid)
-install(FILES third_party/mermaid/LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/slate RENAME mermaid-LICENSE)
 
 include(CTest)
 if(BUILD_TESTING)

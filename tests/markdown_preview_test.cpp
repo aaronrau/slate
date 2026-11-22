@@ -1,4 +1,5 @@
 #include "markdown_preview.hpp"
+#include "mermaid_renderer.hpp"
 
 #include <fcntl.h>
 #include <fstream>
@@ -59,23 +60,6 @@ void has_tag(GtkTextView* view, const char* text, const char* tag) {
     check(gtk_text_iter_has_tag(&iter, gtk_text_tag_table_lookup(table, tag)), tag);
 }
 
-bool browser_available() {
-    if (auto* override = g_getenv("SLATE_CHROME"); override && *override)
-        return access(override, X_OK) == 0;
-    for (const auto* name : {"chrome-headless-shell", "chromium", "google-chrome", "chromium-browser"}) {
-        if (auto* program = g_find_program_in_path(name)) {
-            g_free(program);
-            return true;
-        }
-    }
-#ifdef __APPLE__
-    return access("/Applications/Chromium.app/Contents/MacOS/Chromium", X_OK) == 0 ||
-           access("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", X_OK) == 0;
-#else
-    return false;
-#endif
-}
-
 std::vector<GtkWidget*> diagram_children(GtkTextView* view) {
     std::vector<GtkWidget*> children;
     GtkTextIter iter;
@@ -116,7 +100,7 @@ void mermaid_fences(MarkdownPreview& preview, GtkTextView* view) {
         g_main_context_iteration(nullptr, FALSE);
         g_usleep(1000);
     }
-    const bool available = browser_available();
+    const bool available = slate::mermaid_renderer_available();
     if (available) {
         check(GTK_IS_IMAGE(children[0]) && g_str_equal(gtk_widget_get_name(children[0]), "markdown-mermaid-image"),
               "valid Mermaid fence rendered a GTK image");
@@ -124,12 +108,12 @@ void mermaid_fences(MarkdownPreview& preview, GtkTextView* view) {
         check(pixbuf && gdk_pixbuf_get_width(pixbuf) > 100 && gdk_pixbuf_get_height(pixbuf) > 40,
               "rendered diagram pixbuf");
     } else {
-        check(GTK_IS_EXPANDER(children[0]), "missing browser offers diagram source");
+        check(GTK_IS_EXPANDER(children[0]), "missing renderer offers diagram source");
     }
     check(GTK_IS_EXPANDER(children[1]), "invalid Mermaid fence offers its source");
     auto* expander = GTK_EXPANDER(children[1]);
     check(g_str_equal(gtk_expander_get_label(expander), available ? "Could not render Mermaid diagram"
-                                                                  : "Mermaid needs a Chromium browser"),
+                                                                  : "Mermaid renderer unavailable"),
           "diagram fallback explains its status");
     gtk_expander_set_expanded(expander, TRUE);
     auto* source = gtk_bin_get_child(GTK_BIN(expander));

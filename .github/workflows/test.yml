@@ -13,6 +13,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev xvfb xdotool
       - if: runner.os == 'macOS'
         run: brew install gtk+3 pkgconf
+      - name: Install native Mermaid renderer
+        run: |
+          sh packaging/install-mermaid.sh "$RUNNER_TEMP/merman"
+          echo "SLATE_MERMAN=$RUNNER_TEMP/merman/bin/merman-cli" >> "$GITHUB_ENV"
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build --parallel
       - run: ctest --test-dir build --output-on-failure

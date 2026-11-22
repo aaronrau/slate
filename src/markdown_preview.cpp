@@ -8,8 +8,6 @@
 #include <array>
 #include <atomic>
 #include <cerrno>
-#include <chrono>
-#include <condition_variable>
 #include <cstring>
 #include <fcntl.h>
 #include <mutex>
@@ -174,7 +172,7 @@ std::string heading_id(std::string_view title) {
 
 struct Format {
     MarkdownKind kind;
-    unsigned level, depth, style;
+    std::uint8_t level, depth, style;
     bool quoted;
     unsigned tabs = none;
     bool operator==(const Format&) const = default;
@@ -206,14 +204,14 @@ struct Page {
     std::vector<Pixbuf> images;
     std::vector<std::string> diagrams;
     std::vector<std::vector<TableTab>> tab_sets;
-    int target = 0;
+    int target = 0, table_fit_width = 0;
     Offset index = 0, count = 1, stride = 0;
 };
 
 constexpr double table_scale = .91;
 constexpr int table_pitch = 24;
 constexpr int cell_padding = 6;
-constexpr int cell_minimum = 54;
+constexpr int cell_minimum = 42;
 
 void set_table_font(PangoLayout* layout, bool bold, bool italic = false) {
     auto* font = pango_font_description_from_string("monospace 12");
@@ -265,7 +263,7 @@ public:
     TableText(double dpi, int ascii_advance) : dpi_(dpi), ascii_advance_(ascii_advance) {}
 
     int ascii_advance(std::string_view text) const {
-        return ascii_advance_ && std::all_of(text.begin(), text.end(), [](unsigned char c) { return c < 128; })
+        return ascii_advance_ && std::all_of(text.begin(), text.end(), [](unsigned char c) { return c >= 32 && c < 127; })
              ? ascii_advance_ : 0;
     }
 
@@ -339,6 +337,8 @@ struct Formatter {
     int table_width;
     TableText table_text;
     std::unordered_multimap<std::size_t, unsigned> tab_indices;
+    std::size_t display_cells = 0;
+    bool table_limit = false;
 
     Formatter(Page& output, const MarkdownModel& input, fs::path document_path,
               const std::function<bool()>& cancel, Offset source_target, int width, double dpi, int advance)
@@ -461,7 +461,8 @@ struct Formatter {
     }
 
     Format block_format(const MarkdownBlock& block) const {
-        return {block.kind, block.level, std::min(8u, block.list_depth + block.quote_depth), 0, block.quote_depth != 0};
+        const auto depth = std::min(8u, block.list_depth + block.quote_depth);
+        return {block.kind, std::uint8_t(block.level), std::uint8_t(depth), 0, block.quote_depth != 0};
     }
 
     std::size_t build_table(std::size_t start) {
@@ -500,10 +501,12 @@ struct Formatter {
                 for (auto k = span; k < row.span_end && model.spans[k].begin < c.end; ++k) {
                     const auto& s = model.spans[k];
                     if (!(s.style & MdImage)) continue;
-                    // The pixbuf replaces the alt text. Use an upper bound on
-                    // mixed image/text cells so intrinsic sizes stay intact.
-                    if (const auto index = image(s.destination); index != none)
+                    if (const auto index = image(s.destination); index != none) {
                         image_width += gdk_pixbuf_get_width(page.images[index].get());
+                        const auto alt_end = std::min<unsigned>(s.end, c.begin + prefix);
+                        if (alt_end > s.begin)
+                            width -= table_text.width(source.substr(s.begin, alt_end - s.begin), s.begin, k, model, i == start);
+                    }
                 }
                 width += image_width + 2; // Rounding slack for different GTK/Pango pixel contexts.
                 preferred[col] = std::max(preferred[col], width);
@@ -513,6 +516,9 @@ struct Formatter {
         }
         std::vector<int> widths = preferred;
         if (wrap) {
+            int natural = (table_pitch * int(columns)) + int(block_format(head).depth * 18);
+            for (auto width : preferred) natural += width;
+            page.table_fit_width = std::max(page.table_fit_width, natural);
             const int budget = available - table_pitch * int(columns);
             int lower = cell_minimum, upper = std::max(cell_minimum, budget);
             while (lower < upper) {
@@ -527,6 +533,10 @@ struct Formatter {
                 widths[c] = std::clamp(lower, minimum[c], preferred[c]);
         }
         const auto tabs = table_tabs(widths, head.cell_begin);
+        if (page.tab_sets[tabs].back().x > 65536) {
+            table_limit = true;
+            return end - 1;
+        }
 
         // A row has as many display lines as its tallest cell. Each display
         // line uses the same native tab stops and keeps inline tags and links.
@@ -585,6 +595,13 @@ struct Formatter {
                 cells.push_back({padding, slices.size() - padding, size.span});
                 height = std::max(height, cells.back().count);
             }
+            display_cells += height * columns;
+            // A pathological cell or many padded continuations would
+            // otherwise create an oversized GTK paragraph or display page.
+            if (height * columns > 8192 || display_cells > 48000) {
+                table_limit = true;
+                return end - 1;
+            }
             for (std::size_t line = 0; line < height; ++line) {
                 for (unsigned j = 0; j < cells.size(); ++j) {
                     run(j ? "\t│\t" : "\t", none, base, none);
@@ -603,7 +620,7 @@ struct Formatter {
     }
 
     bool diagram(std::string_view value, Format base) {
-        if (value.size() > 16384 || diagram_instances >= 12) return false;
+        if (value.size() > max_mermaid_source || diagram_instances >= 12) return false;
         auto it = std::find(page.diagrams.begin(), page.diagrams.end(), value);
         const auto index = static_cast<unsigned>(it - page.diagrams.begin());
         if (it == page.diagrams.end()) {
@@ -617,12 +634,13 @@ struct Formatter {
 
     unsigned diagram_instances = 0;
 
-    void build() {
+    bool build() {
         for (std::size_t i = 0; i < model.blocks.size(); ++i) {
-            if (cancelled()) return;
+            if (cancelled()) return false;
             auto& b = model.blocks[i];
             if (b.kind == MarkdownKind::TableHeader) {
                 i = build_table(i);
+                if (table_limit) return false;
                 continue;
             }
             if (target && b.source_offset <= target) page.target = chars;
@@ -646,6 +664,7 @@ struct Formatter {
             } else inlines(b.begin, b.end, span, b.span_end, base);
             if (i + 1 < model.blocks.size()) text("\n", base);
         }
+        return true;
     }
 };
 
@@ -685,17 +704,18 @@ Page prepare(const Request& req, const std::function<bool()>& cancelled) {
         constexpr MarkdownLimits limits{6000, 16000, 12000};
         auto model = parse_markdown(source, cancelled, &limits);
         if (cancelled()) return {};
-        if (!model) {
-            // Short Markdown table rows can expand to the full header width.
-            // Bound that expansion even on inputs already in paged mode.
-            stride = !stride && size > page_size ? page_size :
-                     (!stride || stride > dense_page_size ? dense_page_size : stride / 4);
-            continue;
+        if (model && Formatter{result, *model, req.document.path(), cancelled,
+                               req.locate && offset >= start ? offset - start : 0,
+                               req.table_width, req.dpi, req.ascii_advance}.build()) {
+            result.destinations = std::move(model->destinations);
+            return result;
         }
-        Formatter{result, *model, req.document.path(), cancelled, req.locate && offset >= start ? offset - start : 0,
-                  req.table_width, req.dpi, req.ascii_advance}.build();
-        result.destinations = std::move(model->destinations);
-        return result;
+        if (cancelled()) return {};
+        // Tables expand to the full header width and may wrap each row.
+        // Bound both the parsed and displayed page on dense input.
+        stride = !stride && size > page_size ? page_size :
+                 (!stride || stride > dense_page_size ? dense_page_size : stride / 4);
+        result = Page{};
     }
 }
 
@@ -703,13 +723,11 @@ Page prepare(const Request& req, const std::function<bool()>& cancelled) {
 // snapshot. Workers own no widgets and can finish after window destruction.
 class Worker : public std::enable_shared_from_this<Worker> {
     std::mutex mutex_;
-    std::condition_variable wake_;
     std::optional<Request> next_;
     std::optional<Page> ready_;
     std::atomic<std::uint64_t> generation_{0};
     std::optional<MermaidRenderer> mermaid_;
     bool running_ = false;
-    bool close_browser_ = false;
 
     static void notify(std::function<void()> callback) {
         auto* task = new std::function<void()>(std::move(callback));
@@ -723,18 +741,8 @@ class Worker : public std::enable_shared_from_this<Worker> {
         for (;;) {
             std::optional<Request> current;
             {
-                std::unique_lock lock(mutex_);
-                if (!next_ && mermaid_ && mermaid_->browser_running() && !close_browser_) {
-                    wake_.wait_for(lock, std::chrono::milliseconds(1500), [&] { return next_ || close_browser_; });
-                }
-                if (mermaid_ && mermaid_->browser_running() && (!next_ || close_browser_)) {
-                    close_browser_ = false;
-                    lock.unlock();
-                    mermaid_->release_browser();
-                    continue;
-                }
+                std::lock_guard lock(mutex_);
                 if (!next_) { running_ = false; return; }
-                close_browser_ = false;
                 current.swap(next_);
             }
             auto cancelled = [&] { return generation_.load() != current->generation; };
@@ -752,7 +760,7 @@ class Worker : public std::enable_shared_from_this<Worker> {
             for (unsigned index = 0; index < diagrams.size() && !cancelled(); ++index) {
                 MermaidResult rendered;
                 try { rendered = mermaid_->render(diagrams[index], cancelled); }
-                catch (const std::exception&) { mermaid_->release_browser(); }
+                catch (const std::exception&) {}
                 if (cancelled()) break;
                 notify([callback = current->notify_diagram, index, rendered = std::move(rendered)]() mutable {
                     callback(index, std::move(rendered));
@@ -766,15 +774,12 @@ public:
         ++generation_;
         next_.reset();
         ready_.reset();
-        close_browser_ = true;
-        wake_.notify_one();
     }
     void submit(Request request) {
         std::lock_guard lock(mutex_);
         request.generation = ++generation_;
         next_ = std::move(request);
         ready_.reset();
-        wake_.notify_one();
         if (!running_) {
             std::thread t([self = shared_from_this()] { self->process(); });
             running_ = true;
@@ -961,9 +966,10 @@ struct MarkdownPreview::Impl {
     }
 
     void schedule_table_reflow() {
-        if (!page || row_tabs.empty() || !g_object_get_data(G_OBJECT(box), "markdown-ready")) return;
+        if (!page || !page->table_fit_width || !g_object_get_data(G_OBJECT(box), "markdown-ready")) return;
         if (reflow_timer) { g_source_remove(reflow_timer); reflow_timer = 0; }
-        if (std::abs(available_width() - rendered_width) < 8) return;
+        const int natural = page->table_fit_width;
+        if (std::abs(std::min(available_width(), natural) - std::min(rendered_width, natural)) < 8) return;
         // Let a window or sidebar drag settle before reshaping table cells.
         reflow_timer = g_timeout_add(100, +[](gpointer data) -> gboolean {
             auto* self = static_cast<Impl*>(data);
@@ -973,9 +979,9 @@ struct MarkdownPreview::Impl {
             gtk_text_view_get_visible_rect(text, &visible);
             GtkTextIter top;
             gtk_text_view_get_line_at_y(text, &top, visible.y, nullptr);
-            const auto position = gtk_text_iter_get_offset(&top);
+            const auto row = gtk_text_iter_get_line(&top);
             self->start(self->page->index, 0, false);
-            self->reflow_position = position;
+            self->reflow_position = row;
             return G_SOURCE_REMOVE;
         }, this);
     }
@@ -1067,7 +1073,7 @@ struct MarkdownPreview::Impl {
             atk_object_set_name(gtk_widget_get_accessible(child), "Mermaid diagram");
         } else {
             child = gtk_expander_new(result->status == MermaidStatus::Invalid
-                ? "Could not render Mermaid diagram" : "Mermaid needs a Chromium browser");
+                ? "Could not render Mermaid diagram" : "Mermaid renderer unavailable");
             auto* label = gtk_label_new(page->diagrams[index].c_str());
             gtk_label_set_selectable(GTK_LABEL(label), TRUE);
             gtk_label_set_xalign(GTK_LABEL(label), 0);
@@ -1100,7 +1106,7 @@ struct MarkdownPreview::Impl {
     void apply_block(Format f, GtkTextIter& begin, GtkTextIter& end) {
         auto add = [&](GtkTextTag* tag) { gtk_text_buffer_apply_tag(buffer(), tag, &begin, &end); };
         switch (f.kind) {
-        case MarkdownKind::Heading: add(headings[std::clamp(f.level, 1u, 6u)]); break;
+        case MarkdownKind::Heading: add(headings[std::clamp<unsigned>(f.level, 1, 6)]); break;
         case MarkdownKind::Code: add(code); break;
         case MarkdownKind::Html: add(html); break;
         case MarkdownKind::Rule: add(rule); break;
@@ -1146,7 +1152,7 @@ struct MarkdownPreview::Impl {
                     present_diagram(first_run.diagram, widget);
                     gtk_widget_show(widget);
                 } else {
-                gtk_text_buffer_insert_pixbuf(buffer(), &end, page->images[first_run.image].get());
+                    gtk_text_buffer_insert_pixbuf(buffer(), &end, page->images[first_run.image].get());
                 }
                 GtkTextIter begin;
                 gtk_text_buffer_get_iter_at_offset(buffer(), &begin, pos);
@@ -1219,7 +1225,10 @@ struct MarkdownPreview::Impl {
             else { scroll(page->target); info("Heading not found on this page"); }
             fragment.clear();
         } else if (reflow_position) {
-            scroll(std::min(*reflow_position, gtk_text_buffer_get_char_count(buffer())));
+            GtkTextIter top;
+            gtk_text_buffer_get_iter_at_line(buffer(), &top,
+                std::min(*reflow_position, gtk_text_buffer_get_line_count(buffer()) - 1));
+            scroll(gtk_text_iter_get_offset(&top));
             reflow_position.reset();
         } else scroll(page->target);
         std::vector<Run>().swap(page->runs);

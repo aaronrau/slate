@@ -26,10 +26,11 @@ cmake --build build --parallel
 ./build/slate README.md    # read or edit Markdown
 ```
 
-Install the executable and preview assets for your user account with the following command. On Linux this also installs the **Slate** desktop launcher.
+Install Slate and its Mermaid renderer for your user account. The second command downloads the platform-specific Merman CLI and verifies its SHA-256 checksum. On Linux the first command also installs the **Slate** desktop launcher.
 
 ```sh
 cmake --install build --prefix "$HOME/.local"
+sh packaging/install-mermaid.sh
 ```
 
 ## Editing and search
@@ -68,7 +69,7 @@ flowchart LR
     B --> D[Render diagrams]
 ```
 
-Diagrams render locally with the bundled Mermaid library and an installed Chrome or Chromium browser. You can set `SLATE_CHROME` to its executable path. The editor starts the headless helper when it encounters a diagram. With an unavailable browser or invalid diagram syntax, Preview offers the diagram source.
+To render diagrams, install [Merman CLI 0.11.0](https://github.com/Latias94/merman/releases/tag/v0.11.0) for Linux or macOS. Slate looks for `merman-cli` on your path. Set `SLATE_MERMAN` to use a particular executable. The native helper renders offline while the surrounding text is already available. It exits after each diagram, and Slate reuses rendered diagrams from a 4 MiB cache. If the renderer is unavailable or the Mermaid syntax is invalid, expand the diagram in Preview to read or copy its source.
 
 ## Architecture and memory
 
@@ -77,7 +78,7 @@ Diagrams render locally with the bundled Mermaid library and an installed Chrome
 | Document storage | One open file descriptor and a 64-bit AVL piece tree. Leaves reference offsets into the original file or reference-counted 64 KiB edit blocks. Splitting and joining pieces changes the logical text without shifting the file suffix. Contiguous typing coalesces. Unreferenced edit blocks are released. |
 | Disk reads | Positional reads with a lazy eight-slot, 64 KiB page cache for small requests. Large reads go directly to the caller's buffer. Opening a document needs metadata and one tree leaf. |
 | Viewport | Cairo draws the selection, caret, gutter, and visible Pango layouts. The scrollbar uses byte offsets. Distant seeks show hexadecimal byte addresses in the gutter until a line number is known. The viewport splits very long physical lines into bounded display segments. |
-| Markdown preview | A cancellable worker reads a shared document snapshot, parses Markdown, prepares style runs, and decodes bounded local images. GTK displays native selectable text using a fixed set of reusable tags. Plain-text editing initializes no preview widgets or browser process. |
+| Markdown preview | A cancellable worker reads a shared document snapshot, parses Markdown, prepares style runs, and decodes bounded local images. GTK displays native selectable text using a fixed set of reusable tags. Plain-text editing initializes no preview widgets. Mermaid blocks launch a short-lived native renderer only on a cache miss. |
 | Directory browser | Folders load on expansion in pages of 128 entries. Collapsing a folder releases its rows. Only loaded pages are sorted. There is no persistent workspace index. |
 | Search | A cancellable worker uses native directory entries, checks metadata when the filesystem omits the entry type, skips symlinks, and returns up to 200 results. It opens content candidates relative to their directory descriptor. Filename matching uses ASCII case folding on relative paths. Content matching uses native `memmem` on 256 KiB blocks with overlap for boundary matches. Supported filesystems let the scanner skip sparse holes for text queries. |
 | Save | A worker takes a shared snapshot, streams the edited bytes to a sibling temporary file, flushes it, checks for external changes, and renames it over the destination. Edits pause until the save completes. Existing targets retain their ordinary permission bits. New files start private (0600). |
@@ -133,7 +134,7 @@ The following measurements use the same Linux machine and a warm filesystem cach
 | 1,000 KiB unbroken line, displayed page | 15.2 ms | 1.0 ms | 33.3 MiB |
 | 5 GiB sparse Markdown, alternating first and last pages | 17.5 ms | 0.8 ms | 35.2 MiB |
 
-Releasing a displayed page took under 1 ms on these fixtures. None contained Mermaid diagrams. Diagram rendering temporarily starts a separate Chromium process, which adds to total memory usage. The full desktop process peaked at 42.0 MiB when opening a small Markdown file in a folder with 50,000 entries.
+Releasing a displayed page took under 1 ms on these fixtures. None contained Mermaid diagrams. For diagrams, the native renderer uses additional memory until it exits. The full desktop process peaked at 42.0 MiB when opening a small Markdown file in a folder with 50,000 entries.
 
 For source editing, a warm one-row scroll beyond offset 5 GiB with 768-byte rows took 0.42 ms to lay out and paint (0.45 ms at p95). Reusing already-shaped rows reduced this from 2.20 ms. A second ASCII shaping experiment gained under 2% in painted frames and was dropped. Filename search across a nested 50,000-file fixture fell from 55.4 to 5.7 ms after eliminating per-file metadata calls on ext4. A subsequent substring-matching experiment yielded little further improvement.
 
