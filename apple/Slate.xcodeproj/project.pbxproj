@@ -581,8 +581,8 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Slate/Slate.entitlements";
 				"ENABLE_HARDENED_RUNTIME[sdk=macosx*]" = "YES";
 				"CODE_SIGN_STYLE" = "Automatic";
-				"MARKETING_VERSION" = "1.2.0";
-				"CURRENT_PROJECT_VERSION" = "4";
+				"MARKETING_VERSION" = "1.2.1";
+				"CURRENT_PROJECT_VERSION" = "5";
 				"ASSETCATALOG_COMPILER_APPICON_NAME" = "AppIcon";
 				"SWIFT_OBJC_BRIDGING_HEADER" = "Slate/Slate-Bridging-Header.h";
 				"HEADER_SEARCH_PATHS" = "$(SRCROOT)/../mobile/core $(SRCROOT)/../src";
@@ -607,8 +607,8 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "Slate/Slate.entitlements";
 				"ENABLE_HARDENED_RUNTIME[sdk=macosx*]" = "YES";
 				"CODE_SIGN_STYLE" = "Automatic";
-				"MARKETING_VERSION" = "1.2.0";
-				"CURRENT_PROJECT_VERSION" = "4";
+				"MARKETING_VERSION" = "1.2.1";
+				"CURRENT_PROJECT_VERSION" = "5";
 				"ASSETCATALOG_COMPILER_APPICON_NAME" = "AppIcon";
 				"SWIFT_OBJC_BRIDGING_HEADER" = "Slate/Slate-Bridging-Header.h";
 				"HEADER_SEARCH_PATHS" = "$(SRCROOT)/../mobile/core $(SRCROOT)/../src";

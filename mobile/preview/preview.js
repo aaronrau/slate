@@ -246,6 +246,34 @@
     }
   }
 
+  // Browsers don't break after "/" or "." so a path, URL or slash list in a table
+  // cell sets its column's minimum width. Mark break points after those separators
+  // inside long tokens only; ordinary words still never split, and <wbr> isn't copied.
+  const longToken = /\S{16,}/g;
+  const afterSeparator = /(?<=[\/._?&=#])(?=[^\s\/._?&=#])/;
+  function breakLongTokens(scope) {
+    const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+    const targets = [];
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      longToken.lastIndex = 0;
+      if (longToken.test(node.data)) targets.push(node);
+    }
+    for (const node of targets) {
+      const text = node.data, pieces = document.createDocumentFragment();
+      let last = 0;
+      for (const match of text.matchAll(longToken)) {
+        pieces.append(text.slice(last, match.index));
+        match[0].split(afterSeparator).forEach((part, i) => {
+          if (i) pieces.append(document.createElement("wbr"));
+          pieces.append(part);
+        });
+        last = match.index + match[0].length;
+      }
+      pieces.append(text.slice(last));
+      node.replaceWith(pieces);
+    }
+  }
+
   function render(markdown, colors = {}) {
     const version = ++revision;
     const dark = colors.dark !== false;
@@ -265,6 +293,7 @@
     theme.dark = dark;
     drag = gesture = queued = null;
     output.innerHTML = md.render(markdown);
+    for (const table of output.querySelectorAll("table")) breakLongTokens(table);
     const anchors = new Map();
     for (const heading of output.querySelectorAll("h1,h2,h3,h4,h5,h6")) {
       const slug = heading.textContent.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, "").replace(/\s+/g, "-");

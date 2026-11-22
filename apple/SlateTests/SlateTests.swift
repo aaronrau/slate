@@ -464,6 +464,48 @@ final class SlateTests: XCTestCase {
     }
 
     @MainActor
+    func testPreviewTableColumnsKeepWordsWholeAndFitLongPaths() async throws {
+        let controller = PreviewController()
+        let web = controller.makeView()
+        web.frame = CGRect(x: 0, y: 0, width: 420, height: 400)
+        let markup = """
+        | ID | Canonical report and exact cycles | Tested change / scope | Where |
+        | --- | --- | --- | --- |
+        | 01 | Original Python replay | Separate actor/order/correction/hypothetical/unknown checks. | https://example.com/a/really/long/path/to/configuration-reference.html |
+        """
+        controller.update(web, PreviewContent(TextPage(text: markup), Appearance(), fontSize: 13))
+        // Each word's own width must fit its cell (no word split across lines), and the
+        // paths and URL wrap at their separators, so the table fits the page.
+        let query = """
+        (() => {
+          const table = document.querySelector('table'); if (!table) return 'pending';
+          const box = table.parentElement;
+          const words = ['Canonical', 'Original', 'Python', 'replay', 'Tested', 'change'];
+          for (const cell of table.querySelectorAll('th, td')) {
+            const range = document.createRange();
+            for (const node of cell.childNodes) {
+              if (node.nodeType !== 3) continue;
+              for (const word of words) {
+                const at = node.data.indexOf(word); if (at < 0) continue;
+                range.setStart(node, at); range.setEnd(node, at + word.length);
+                if (range.getClientRects().length !== 1) return 'split ' + word;
+              }
+            }
+          }
+          if (!table.querySelector('wbr')) return 'no break points';
+          return table.scrollWidth <= box.clientWidth + 1 ? 'ok' : 'wide ' + table.scrollWidth + '>' + box.clientWidth;
+        })()
+        """
+        var result = ""
+        for _ in 0..<100 {
+            result = (try? await web.evaluateJavaScript(query)) as? String ?? ""
+            if result != "pending" && !result.isEmpty { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertEqual(result, "ok")
+    }
+
+    @MainActor
     func testPreviewDiagramsZoomAndAcceptSemicolonsInSequenceMessages() async throws {
         let controller = PreviewController()
         let web = controller.makeView()
