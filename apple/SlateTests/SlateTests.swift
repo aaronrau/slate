@@ -145,12 +145,13 @@ final class SlateTests: XCTestCase {
 
         let workspace = WorkspaceModel()
         workspace.open(folder: dir)
-        try await waitUntil { !workspace.busy }
-        XCTAssertEqual(Set(workspace.rows.map { $0.url.lastPathComponent }), ["notes.md", "log.txt"])
+        let branch = try XCTUnwrap(workspace.expanded.values.first)
+        try await waitUntil { !branch.busy }
+        XCTAssertEqual(Set(branch.rows.map { $0.url.lastPathComponent }), ["notes.md", "log.txt"])
         workspace.contents = true
         workspace.query = "needle"
-        try await waitUntil { !workspace.busy }
-        let hit = try XCTUnwrap(workspace.rows.first)
+        try await waitUntil { !workspace.searching }
+        let hit = try XCTUnwrap(workspace.hits.first)
         XCTAssertEqual(hit.offset, UInt64("# Notes\n🍏 ".utf8.count))
         model.open(second)
         model.openExternal(first)
@@ -158,13 +159,64 @@ final class SlateTests: XCTestCase {
         model.resumePendingOpen()
         try await waitUntil { !model.busy }
         XCTAssertEqual(model.file?.url, first)
-        model.open(hit.url, workspace: workspace.root, offset: hit.offset, length: hit.matchLength)
+        model.open(hit.url, workspace: try workspace.access(for: hit), offset: hit.offset, length: hit.matchLength)
         XCTAssertFalse(model.preview)
         XCTAssertEqual((model.page.text as NSString).substring(with: model.selection), "needle")
         let visit = try XCTUnwrap(model.history.back)
         model.navigate(visit: visit)
         try await waitUntil { !model.busy }
         XCTAssertEqual(model.file?.url.standardizedFileURL, second.standardizedFileURL)
+    }
+
+    @MainActor
+    func testFilesTreeRetainsGrantedLocationsAndReleasesCollapsedPages() async throws {
+        let name = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(name)
+        defer { defaults.removePersistentDomain(forName: name); try? fm.removeItem(at: root) }
+        let local = root.appendingPathComponent("Local")
+        let first = root.appendingPathComponent("First")
+        let folder = first.appendingPathComponent("Tree")
+        let second = root.appendingPathComponent("Second")
+        for url in [local, folder, second] { try fm.createDirectory(at: url, withIntermediateDirectories: true) }
+        for n in 0..<150 { try Data().write(to: folder.appendingPathComponent("note-\(n).txt")) }
+
+        var original: WorkspaceModel? = WorkspaceModel(defaults: defaults, documents: local)
+        original?.open(folder: first)
+        original?.open(folder: second)
+        original = nil
+        let restored = WorkspaceModel(defaults: defaults, documents: local)
+        XCTAssertEqual(restored.locations.map(\.title), ["Slate Documents", "First", "Second"])
+        let location = try XCTUnwrap(restored.locations.first(where: { $0.title == "First" }))
+        XCTAssertNil(restored.expanded[location.id])
+        restored.toggle(location)
+        let branch = try XCTUnwrap(restored.expanded[location.id])
+        try await waitUntil { !branch.busy }
+        let child = try XCTUnwrap(branch.rows.first?.url)
+        branch.toggle(child)
+        var files = try XCTUnwrap(branch.children[child])
+        try await waitUntil { !files.busy }
+        XCTAssertEqual(files.rows.count, 128)
+        XCTAssertTrue(files.more)
+        files.loadMore()
+        try await waitUntil { !files.busy }
+        XCTAssertEqual(files.rows.count, 150)
+        restored.query = "note-149"
+        try await waitUntil { !restored.searching }
+        let hit = try XCTUnwrap(restored.hits.first)
+        XCTAssertEqual(try restored.access(for: hit).url.lastPathComponent, "First")
+        restored.query = ""
+        XCTAssertTrue(branch.children[child] === files)
+        branch.toggle(child)
+        XCTAssertNil(branch.children[child])
+        branch.toggle(child)
+        files = try XCTUnwrap(branch.children[child])
+        try await waitUntil { !files.busy }
+        XCTAssertEqual(files.rows.count, 128)
+        restored.forget(location)
+        let reopened = WorkspaceModel(defaults: defaults, documents: local)
+        XCTAssertEqual(reopened.locations.map(\.title), ["Slate Documents", "Second"])
     }
 
     @MainActor

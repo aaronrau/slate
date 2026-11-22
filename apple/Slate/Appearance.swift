@@ -47,7 +47,7 @@ final class Appearance: ObservableObject {
         didSet { UserDefaults.standard.set(overrides, forKey: "Slate.colors") }
     }
     init() {
-        dark = UserDefaults.standard.object(forKey: "Slate.dark") as? Bool ?? true
+        dark = UserDefaults.standard.object(forKey: "Slate.dark") == nil || UserDefaults.standard.bool(forKey: "Slate.dark")
         overrides = UserDefaults.standard.dictionary(forKey: "Slate.colors") as? [String: String] ?? [:]
     }
 

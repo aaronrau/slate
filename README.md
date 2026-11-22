@@ -7,7 +7,9 @@ Slate is a native text editor for Linux, macOS, iPhone, iPad, and Android. All e
 - For **iOS 17+, iPadOS 17+, and macOS 14+**, open `apple/Slate.xcodeproj` in Xcode, select the **Slate** scheme, choose a simulator or **My Mac**, and run. For a physical iPhone or iPad, select your development team under Signing & Capabilities. SwiftUI supplies the shared UI, with native text editing on each platform.
 - For **Android**, open `android/` in Android Studio, or run `./gradlew :app:assembleDebug` from that directory with JDK 17 and the Android SDK installed. With a device or emulator connected, run `./gradlew :app:installDebug`. The debug APK is in `android/app/build/outputs/apk/debug/`.
 
-Choose a file or folder through the system picker. The Apple app opens 64 KiB pages. Android uses 32 KiB for source and 128 KiB for preview. Both load the offline Markdown preview on demand and preserve the rest of the file when editing a page. Formatting constructs that cross a page boundary can render independently on each side. Document providers can require a local copy when a file cannot be read at arbitrary offsets.
+On a phone, tap **☰** in the upper left to open **Files**. On a wider screen, the file tree sits beside the editor. Choose **Open Folder** and grant access in the system picker to add a folder to the tree. Tap a folder to expand it, then tap a filename to open it. Return to **Files** to continue browsing the same tree. Slate remembers granted folders across launches. Opening an individual file grants access to that file. To browse its siblings, choose its parent with **Open Folder**.
+
+The Apple app opens 64 KiB pages. Android uses 32 KiB for source and 128 KiB for preview. Both load the offline Markdown preview on demand and preserve the rest of the file when editing a page. Formatting constructs that cross a page boundary can render independently on each side. Document providers can require a local copy when a file cannot be read at arbitrary offsets.
 
 ## GTK desktop build
 

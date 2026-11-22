@@ -9,6 +9,7 @@ struct EditorWindow: View {
     let settings: () -> Void
     @State private var sidebar = true
     @State private var compactBrowser = false
+    @State private var pendingSelection: URL?
     @State private var exportName = ""
     @State private var slider: Double?
 
@@ -18,12 +19,12 @@ struct EditorWindow: View {
             VStack(spacing: 0) {
                 toolbar(compact: compact)
                 rule
-                HStack(spacing: 0) {
-                    if compact ? compactBrowser : sidebar {
-                        browser(compact: compact).frame(width: compact ? geometry.size.width : 254)
-                        if !compact { Rectangle().fill(appearance.color(.border)).frame(width: 1) }
-                    }
-                    if !compact || !compactBrowser {
+                ZStack(alignment: .leading) {
+                    HStack(spacing: 0) {
+                        if !compact && sidebar {
+                            files(compact: false).frame(width: 264)
+                            Rectangle().fill(appearance.color(.border)).frame(width: 1)
+                        }
                         VStack(spacing: 0) {
                             TabStrip(history: model.history, model: model, appearance: appearance)
                             rule
@@ -37,12 +38,28 @@ struct EditorWindow: View {
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
+                    .accessibilityHidden(compact && compactBrowser)
+                    if compact && compactBrowser {
+                        Button { compactBrowser = false } label: { Color.black.opacity(0.45) }
+                            .buttonStyle(.plain).accessibilityLabel("Close Files")
+                        files(compact: true)
+                            .frame(width: min(322, geometry.size.width * 0.84))
+                            .shadow(color: .black.opacity(0.25), radius: 8, x: 3)
+                            .transition(.move(edge: .leading))
+                    }
                 }
             }
             .foregroundStyle(appearance.color(.text))
             .background(appearance.color(.background))
         }
-        .onChange(of: workspace.root?.url) { _ in sidebar = true; compactBrowser = true }
+        .onChange(of: workspace.folderPicked) { sidebar = true; compactBrowser = true }
+        .onChange(of: model.file?.url) { _, url in
+            workspace.includeGrant(for: model.file)
+            if let url, pendingSelection?.standardizedFileURL.path == url.standardizedFileURL.path {
+                compactBrowser = false
+                pendingSelection = nil
+            }
+        }
         .alert("Unsaved changes to \(model.title)", isPresented: $model.confirmDiscard) {
             Button("Keep Editing", role: .cancel) { model.cancelDiscard() }
             Button("Discard Changes", role: .destructive) { model.discard() }
@@ -67,18 +84,23 @@ struct EditorWindow: View {
 
     private func toolbar(compact: Bool) -> some View {
         HStack(spacing: 12) {
-            icon("sidebar.left", "Toggle workspace") {
-                if compact { compactBrowser.toggle() } else { sidebar.toggle() }
+            Button {
+                withAnimation(.easeOut(duration: 0.18)) {
+                    if compact { compactBrowser.toggle() } else { sidebar.toggle() }
+                }
+            } label: {
+                Label("Files", systemImage: "line.3.horizontal")
+                    .labelStyle(.titleAndIcon).font(.callout.weight(.semibold)).frame(minHeight: 44)
             }
-            if compact && compactBrowser {
-                Text("Workspace").fontWeight(.semibold)
-            } else if model.markdown {
+            .buttonStyle(.plain)
+            .accessibilityLabel("Files")
+            .accessibilityValue((compact ? compactBrowser : sidebar) ? "Expanded" : "Collapsed")
+            .accessibilityIdentifier("files-toggle")
+            if model.markdown {
                 Picker("Document view", selection: $model.preview) {
                     Text("Source").tag(false)
                     Text("Preview").tag(true)
                 }.pickerStyle(.segmented).frame(maxWidth: 170).disabled(!model.page.isUTF8)
-            } else {
-                Text("Slate").fontWeight(.semibold)
             }
             Spacer(minLength: 0)
             if model.busy { ProgressView().controlSize(.small) }
@@ -104,70 +126,24 @@ struct EditorWindow: View {
             .buttonStyle(.plain).accessibilityLabel(label).help(label)
     }
 
-    private func browser(compact: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(workspace.directory?.lastPathComponent ?? "Workspace")
-                    .font(.headline).lineLimit(1)
-                Spacer()
-                if workspace.canAscend { icon("arrow.up", "Enclosing folder") { workspace.ascend() } }
-                icon("folder.badge.plus", "Open folder") { pickFolder() }
-            }.padding(.horizontal, 12)
-            if workspace.root != nil {
-                HStack {
-                    Image(systemName: "magnifyingglass")
-                    TextField("Search workspace", text: $workspace.query).textFieldStyle(.plain)
-                    if !workspace.query.isEmpty { icon("xmark.circle.fill", "Clear search") { workspace.query = "" } }
-                }
-                .padding(.horizontal, 8).frame(minHeight: 32)
-                .background(appearance.color(.background), in: RoundedRectangle(cornerRadius: 5))
-                .padding(.horizontal, 10)
-                Picker("Search mode", selection: $workspace.contents) {
-                    Text("File names").tag(false)
-                    Text("Contents").tag(true)
-                }.pickerStyle(.segmented).padding(10)
-                rule
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(workspace.rows) { row in
-                            Button {
-                                if row.isDirectory { workspace.descend(row.url) }
-                                else {
-                                    model.open(row.url, workspace: workspace.root, offset: row.offset, length: row.matchLength)
-                                    if compact { compactBrowser = false }
-                                }
-                            } label: {
-                                HStack(alignment: .top, spacing: 9) {
-                                    Image(systemName: row.isDirectory ? "folder" : "doc.text").frame(width: 16)
-                                        .foregroundStyle(appearance.color(.muted))
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(row.url.lastPathComponent).lineLimit(1)
-                                        if !workspace.query.isEmpty, let root = workspace.root?.url {
-                                            Text(String(row.url.path.dropFirst(root.path.count + 1)))
-                                                .font(.caption).foregroundStyle(appearance.color(.muted)).lineLimit(1)
-                                        }
-                                        if !row.excerpt.isEmpty { Text(row.excerpt).font(.caption.monospaced()).lineLimit(2) }
-                                    }
-                                    Spacer(minLength: 0)
-                                }
-                                .padding(.horizontal, 12).padding(.vertical, 7).contentShape(Rectangle())
-                            }.buttonStyle(.plain)
-                        }
-                        if workspace.more { Button("Load more files") { workspace.loadMore() }.padding(12) }
-                        if workspace.busy { ProgressView().padding(12) }
-                        if let message = workspace.message { Text(message).font(.caption).padding(12) }
-                        else if !workspace.busy && workspace.rows.isEmpty {
-                            Text(workspace.query.isEmpty ? "Empty folder" : "No matches").font(.callout).padding(12)
-                        }
-                    }
-                }
-            } else {
-                Button("Open Folder…", action: pickFolder).padding(12)
+    private func files(compact: Bool) -> some View {
+        FilesSidebar(workspace: workspace, model: model, appearance: appearance, pickFolder: pickFolder,
+                     select: { row, access in
+            if compact {
+                if model.file?.url.standardizedFileURL.path == row.url.standardizedFileURL.path {
+                    compactBrowser = false
+                } else { pendingSelection = row.url }
             }
-            Spacer(minLength: 0)
-        }
-        .background(appearance.color(.surface))
-        .frame(maxHeight: .infinity)
+            if row.offset != nil || model.file?.url.standardizedFileURL.path != row.url.standardizedFileURL.path {
+                model.open(row.url, workspace: access, offset: row.offset, length: row.matchLength)
+            }
+        }, selectTab: { tab in
+            if compact {
+                if model.history.active == tab.id { compactBrowser = false }
+                else { pendingSelection = URL(fileURLWithPath: tab.path) }
+            }
+            model.showTab(tab)
+        })
     }
 
     private var pageFooter: some View {

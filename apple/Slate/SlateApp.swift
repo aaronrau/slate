@@ -19,7 +19,7 @@ struct SlateApp: App {
     @NSApplicationDelegateAdaptor(SlateAppDelegate.self) private var delegate
     #endif
     @StateObject private var model = EditorModel()
-    @StateObject private var workspace = WorkspaceModel()
+    @StateObject private var workspace = WorkspaceModel.applicationWorkspace()
     @StateObject private var appearance = Appearance()
     @State private var sheet: EditorSheet?
     @Environment(\.scenePhase) private var phase

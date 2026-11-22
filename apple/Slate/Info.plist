@@ -11,6 +11,7 @@
             <key>LSItemContentTypes</key><array><string>public.text</string><string>net.daringfireball.markdown</string></array>
         </dict>
     </array>
+    <key>UIFileSharingEnabled</key><true/>
     <key>LSSupportsOpeningDocumentsInPlace</key><true/>
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
 </dict>
