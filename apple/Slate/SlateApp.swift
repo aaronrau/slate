@@ -2,12 +2,13 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum EditorSheet: Identifiable {
-    case appearance, file, folder, export(URL)
+    case appearance, file, folder, reveal(URL), export(URL)
     var id: String {
         switch self {
         case .appearance: return "appearance"
         case .file: return "file"
         case .folder: return "folder"
+        case .reveal(let file): return "folder-" + file.absoluteString
         case .export(let url): return url.absoluteString
         }
     }
@@ -27,7 +28,7 @@ struct SlateApp: App {
     var body: some Scene {
         WindowGroup {
             EditorWindow(model: model, appearance: appearance, workspace: workspace,
-                         pickFile: { pick(folder: false) }, pickFolder: { pick(folder: true) },
+                         pickFile: { pick(folder: false) }, pickFolder: { pick(folder: true) }, showInFolder: reveal,
                          settings: { sheet = .appearance })
                 .preferredColorScheme(appearance.dark ? .dark : .light)
                 .tint(appearance.color(.accent))
@@ -50,12 +51,13 @@ struct SlateApp: App {
                         AppearanceView(appearance: appearance)
                             .preferredColorScheme(appearance.dark ? .dark : .light)
                     #if os(iOS)
-                    case .file, .folder, .export:
+                    case .file, .folder, .reveal, .export:
                         DocumentPicker(item: item) { result in
                             self.sheet = nil
                             switch item {
                             case .file: if let result { model.open(result) }
                             case .folder: if let result { workspace.open(folder: result) }
+                            case .reveal(let file): if let result { finishReveal(file: file, folder: result) }
                             case .export: model.finishExport(result)
                             case .appearance: break
                             }
@@ -110,6 +112,38 @@ struct SlateApp: App {
         }
     }
 
+    private func reveal(_ file: ScopedURL) {
+        workspace.showInFolder(file) { parent in
+            #if os(macOS)
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.directoryURL = parent
+            panel.prompt = "Open Folder"
+            panel.message = "Choose the folder containing “\(file.url.lastPathComponent)”."
+            panel.begin { response in
+                if response == .OK, let url = panel.url { finishReveal(file: file.url, folder: url) }
+            }
+            #else
+            sheet = .reveal(file.url)
+            #endif
+        }
+    }
+
+    private func finishReveal(file: URL, folder: URL) {
+        let grant = ScopedURL(folder)
+        let root = folder.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        let target = file.resolvingSymlinksInPath().standardizedFileURL
+        guard target.pathComponents.starts(with: root), target.pathComponents.count > root.count else {
+            model.errorMessage = "Choose “\(file.deletingLastPathComponent().lastPathComponent)” or a folder containing it."
+            return
+        }
+        workspace.open(folder: grant.url)
+        workspace.showInFolder(ScopedURL(file, parent: grant)) { _ in
+            model.errorMessage = "The selected folder could not be read or the file has moved."
+        }
+    }
+
     private func pick(folder: Bool) {
         #if os(macOS)
         let panel = NSOpenPanel()
@@ -138,6 +172,10 @@ struct DocumentPicker: UIViewControllerRepresentable {
         let picker: UIDocumentPickerViewController
         switch item {
         case .folder: picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
+        case .reveal(let file):
+            picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
+            picker.directoryURL = file.deletingLastPathComponent()
+            picker.title = "Choose the folder containing “\(file.lastPathComponent)”"
         case .export(let url): picker = UIDocumentPickerViewController(forExporting: [url], asCopy: true)
         default: picker = UIDocumentPickerViewController(forOpeningContentTypes: [.data], asCopy: false)
         }

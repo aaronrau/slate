@@ -147,10 +147,18 @@ final class SidebarSearch implements AutoCloseable {
         pending = stop;
         scanner.execute(() -> {
             try {
-                Workspace.Results result = Workspace.find(ui.getContentResolver(), folders, looseFiles, term, text, stop);
+                Workspace.Results result = Workspace.find(ui.getContentResolver(), folders, looseFiles, term, text, stop, partial ->
+                    ui.runOnUiThread(() -> {
+                        if (closed || pending != stop) return;
+                        hits.clear();
+                        hits.addAll(partial);
+                        summary.setText(hits.size() + (hits.size() == 1 ? " match" : " matches") + " · Searching…");
+                        adapter.notifyDataSetChanged();
+                    }));
                 ui.runOnUiThread(() -> {
                     if (closed || pending != stop) return;
                     pending = null;
+                    hits.clear();
                     hits.addAll(result.entries());
                     int n = hits.size();
                     String message = n == 0 ? "No matches" : n + (n == Workspace.LIMIT ? "+" : "") + (n == 1 ? " match" : " matches");

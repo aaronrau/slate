@@ -44,6 +44,12 @@ final class FilesSidebarTests: XCTestCase {
         XCTAssertTrue(file.isSelected)
         nested.tap()
         XCTAssertFalse(file.exists)
+        if !tablet { toggle.tap() }
+        let options = app.buttons["file-options"]
+        options.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        app.buttons["current-show-folder"].tap()
+        XCTAssertTrue(file.waitForExistence(timeout: 8))
+        XCTAssertTrue(file.isSelected)
     }
 
     @MainActor

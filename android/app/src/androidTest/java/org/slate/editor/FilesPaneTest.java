@@ -173,7 +173,7 @@ public final class FilesPaneTest extends ActivityInstrumentationTestCase2<MainAc
     }
 
     private void manageNestedFile(MainActivity activity, Uri grant, String docId) throws Throwable {
-        Workspace ws = new Workspace(activity.getContentResolver(), grant);
+        Workspace ws = new Workspace(activity, grant);
         Uri nested = DocumentsContract.buildDocumentUriUsingTree(grant, docId + "/nested");
         Uri note = DocumentsContract.buildDocumentUriUsingTree(grant, docId + "/nested/notes.md");
         waitForView("Actions for nested");

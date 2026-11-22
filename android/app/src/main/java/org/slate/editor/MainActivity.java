@@ -6,6 +6,7 @@ import android.content.res.ColorStateList;
 import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.*;
+import android.provider.DocumentsContract;
 import android.text.*;
 import android.text.method.*;
 import android.view.*;
@@ -19,7 +20,8 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 
 @SuppressWarnings("deprecation")
 public final class MainActivity extends Activity {
-    private static final int OPEN = 1, FOLDER = 2, CREATE = 3, NEW_PARENT = 4;
+    private static final int OPEN = 1, FOLDER = 2, CREATE = 3, NEW_PARENT = 4, LOCATION = 5;
+    private Uri locatingFile;
     private static final int SOURCE_PAGE = 32 * 1024, PREVIEW_PAGE = 128 * 1024;
     private static final int HISTORY_BYTES = 8 * 1024 * 1024;
     private final ExecutorService io = Executors.newSingleThreadExecutor();
@@ -59,6 +61,7 @@ public final class MainActivity extends Activity {
         navigation = new Navigation(this);
         workspace = new WorkspaceTree(this, theme);
         drawerOpen = state != null && state.getBoolean("filesDrawer");
+        if (state != null) locatingFile = state.getParcelable("locatingFile");
         build();
         paint();
         showPage(0, 0);
@@ -565,7 +568,10 @@ public final class MainActivity extends Activity {
             theme.dark ? android.R.style.Theme_Material : android.R.style.Theme_Material_Light), more);
         item(menu, "New file…", true, workspace::newFile);
         item(menu, "New untitled document", true, () -> leave(this::newFile));
-        if (file.uri != null) item(menu, "Delete file…", true, () -> deleteFile(file.uri, file.name));
+        if (file.uri != null) {
+            item(menu, "Show in folder…", true, () -> workspace.showFolder(file.uri));
+            item(menu, "Delete file…", true, () -> deleteFile(file.uri, file.name));
+        }
         item(menu, "Open file…", true, this::pickFile);
         item(menu, "Open folder…", true, this::pickFolder);
         if (workspace.hasFolder()) {
@@ -602,6 +608,11 @@ public final class MainActivity extends Activity {
             .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), OPEN);
     }
     void pickFolder() { startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), FOLDER); }
+    void pickLocation(Uri file, Uri hint) {
+        locatingFile = file;
+        startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+            .putExtra(DocumentsContract.EXTRA_INITIAL_URI,hint), LOCATION);
+    }
     void pickNewParent() { if (!busy) startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), NEW_PARENT); }
 
     private void persist(Uri uri, Intent data) {
@@ -619,12 +630,20 @@ public final class MainActivity extends Activity {
         super.onActivityResult(request, result, data);
         if (result != RESULT_OK || data == null || data.getData() == null) {
             if (request == CREATE) afterCreate = null;
+            if (request == LOCATION) locatingFile = null;
             return;
         }
         Uri uri = data.getData();
         persist(uri, data);
         if (request == OPEN) requestOpen(uri, -1, 0, null, true, true);
         else if (request == FOLDER) { workspace.choose(uri); showFiles(); }
+        else if (request == LOCATION) {
+            workspace.choose(uri);
+            showFiles();
+            Uri source = locatingFile;
+            locatingFile = null;
+            if (source != null) workspace.showFolder(source,false);
+        }
         else if (request == NEW_PARENT) { workspace.choose(uri); showFiles(); workspace.newAtRoot(uri); }
         else if (request == CREATE) {
             Runnable follow = afterCreate; afterCreate = null;
@@ -645,7 +664,7 @@ public final class MainActivity extends Activity {
         leave(() -> {
             remember();
             runIO("Creating file…", () -> scope.create(parent, name), created -> {
-                workspace.created(parent, created.pageStart());
+                workspace.created(parent, created.uri());
                 // Creating succeeded even if this provider subsequently refuses
                 // a read. Refresh the folder before attempting to open it.
                 runIO("Opening new file…", () -> EditorFile.open(this, created.uri()), opened -> {
@@ -673,6 +692,8 @@ public final class MainActivity extends Activity {
                 remember();
                 runIO("Deleting file…", () -> {
                     Workspace.delete(this, confirmed);
+                    try { DirectoryIndex.get(this).deleteDocument(target); }
+                    catch (RuntimeException error) { android.util.Log.w("Slate","Could not update directory cache",error); }
                     try { navigation.remove(target); return (RuntimeException)null; }
                     catch (RuntimeException cleanupError) { return cleanupError; }
                 }, cleanupError -> {
@@ -789,7 +810,7 @@ public final class MainActivity extends Activity {
         if (!busy && file.uri != null) navigation.remember(caret(), previewing);
     }
 
-    private void toast(String message) { Toast.makeText(this, message, Toast.LENGTH_SHORT).show(); }
+    void toast(String message) { Toast.makeText(this, message, Toast.LENGTH_SHORT).show(); }
     void error(Exception error) {
         if (!isDestroyed()) dialog().setTitle("Slate").setMessage(error.getLocalizedMessage())
             .setPositiveButton("Close", null).show();
@@ -817,8 +838,14 @@ public final class MainActivity extends Activity {
         else leave(this::finish);
     }
     @Override protected void onPause() { super.onPause(); remember(); }
+    @Override protected void onRestart() {
+        super.onRestart();
+        workspace.readGrants(true);
+    }
+
     @Override protected void onSaveInstanceState(Bundle state) {
         super.onSaveInstanceState(state);
+        state.putParcelable("locatingFile",locatingFile);
         state.putBoolean("untitled", file.uri == null);
         state.putBoolean("filesDrawer", drawerOpen);
     }
