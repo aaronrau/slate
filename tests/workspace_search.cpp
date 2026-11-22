@@ -79,6 +79,15 @@ void boundary_matches() {
           "UTF-8 byte offsets and one-line excerpt");
     hits = search(temp.path, "");
     check(hits.empty(), "empty query");
+    // Every position matches the query's first and last byte: the vector scan
+    // gives up on its candidates and must still find both matches.
+    content.assign(block + 4096, 'a');
+    content.replace(100000, 3, "aXa");
+    content.replace(block + 1, 3, "aXa");
+    write(temp.path / "a.txt", content);
+    hits = search(temp.path, "aXa");
+    check(hits.size() == 2 && hits[0].offset == 100000 && hits[1].offset == block + 1,
+          "repetitive text and query");
 }
 
 void sparse_offsets() {

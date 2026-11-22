@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdint>
 #include <cstring>
 #include <dirent.h>
 #include <iterator>
@@ -12,12 +13,80 @@
 #include <utility>
 #include <vector>
 
+// Apple's memmem scans dense text at about 1.4 GB/s on an M2, a tenth of the rate
+// pread delivers from the page cache, so content search there uses a vector pair scan.
+#if defined(__APPLE__) && defined(__ARM_NEON)
+#include <arm_neon.h>
+#define SLATE_PAIR_SEARCH 1
+#elif defined(__APPLE__) && defined(__SSE2__)
+#include <emmintrin.h>
+#define SLATE_PAIR_SEARCH 1
+#endif
+
 namespace slate {
 namespace {
 
 namespace fs = std::filesystem;
 constexpr std::size_t block_size = 256 * 1024;
 static_assert(sizeof(off_t) >= 8, "Slate requires 64-bit file offsets");
+
+#ifdef SLATE_PAIR_SEARCH
+// One bit per byte position (NEON: one nibble) where the needle's first byte and
+// its last byte, needle.size() - 1 further on, both match.
+#ifdef __ARM_NEON
+constexpr int lane_shift = 2;
+constexpr std::uint64_t lane_bits = 0xF;
+inline std::uint64_t pair_mask(const char* at, std::size_t last, uint8x16_t first_byte, uint8x16_t last_byte) {
+    const auto head = vceqq_u8(vld1q_u8(reinterpret_cast<const std::uint8_t*>(at)), first_byte);
+    const auto tail = vceqq_u8(vld1q_u8(reinterpret_cast<const std::uint8_t*>(at + last)), last_byte);
+    const auto both = vandq_u8(head, tail);
+    return vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(both), 4)), 0);
+}
+#else
+constexpr int lane_shift = 0;
+constexpr std::uint64_t lane_bits = 1;
+inline std::uint64_t pair_mask(const char* at, std::size_t last, __m128i first_byte, __m128i last_byte) {
+    const auto head = _mm_cmpeq_epi8(_mm_loadu_si128(reinterpret_cast<const __m128i*>(at)), first_byte);
+    const auto tail = _mm_cmpeq_epi8(_mm_loadu_si128(reinterpret_cast<const __m128i*>(at + last)), last_byte);
+    return static_cast<std::uint32_t>(_mm_movemask_epi8(_mm_and_si128(head, tail)));
+}
+#endif
+
+// The first occurrence of needle in haystack, as memmem. A pair that matches but
+// isn't the needle costs a memcmp; when those outnumber one per 16 bytes scanned
+// (a repetitive needle and file), the rest goes to memmem, which stays linear.
+const char* find_bytes(const char* haystack, std::size_t size, std::string_view needle) {
+    const auto length = needle.size();
+    if (length < 2 || size < length) return static_cast<const char*>(::memmem(haystack, size, needle.data(), length));
+    const auto last = length - 1;
+#ifdef __ARM_NEON
+    const auto first_byte = vdupq_n_u8(static_cast<std::uint8_t>(needle.front()));
+    const auto last_byte = vdupq_n_u8(static_cast<std::uint8_t>(needle.back()));
+#else
+    const auto first_byte = _mm_set1_epi8(needle.front());
+    const auto last_byte = _mm_set1_epi8(needle.back());
+#endif
+    std::size_t at = 0, misses = 0;
+    // Every candidate start in [at, at + 16) leaves room for the whole needle.
+    while (at + last + 16 <= size) {
+        for (auto mask = pair_mask(haystack + at, last, first_byte, last_byte); mask; ) {
+            const auto lane = static_cast<std::size_t>(__builtin_ctzll(mask)) >> lane_shift;
+            const auto* candidate = haystack + at + lane;
+            if (std::memcmp(candidate + 1, needle.data() + 1, length - 2) == 0) return candidate;
+            if (++misses > 64 + at / 16) {
+                return static_cast<const char*>(::memmem(haystack + at, size - at, needle.data(), length));
+            }
+            mask &= ~(lane_bits << (lane << lane_shift));
+        }
+        at += 16;
+    }
+    return static_cast<const char*>(::memmem(haystack + at, size - at, needle.data(), length));
+}
+#else
+const char* find_bytes(const char* haystack, std::size_t size, std::string_view needle) {
+    return static_cast<const char*>(::memmem(haystack, size, needle.data(), needle.size()));
+}
+#endif
 
 char fold_ascii(char c) {
     return c >= 'A' && c <= 'Z' ? static_cast<char>(c + ('a' - 'A')) : c;
@@ -142,8 +211,7 @@ void scan_file(int directory, const char* name, const fs::path& root, const std:
             const auto base = static_cast<std::uint64_t>(pos) - carry;
             auto cursor = static_cast<std::size_t>(std::max(base, next_match) - base);
             while (cursor < size && !stop.stop_requested()) {
-                const auto* found = static_cast<const char*>(
-                    ::memmem(buffer.data() + cursor, size - cursor, query.data(), query.size()));
+                const auto* found = find_bytes(buffer.data() + cursor, size - cursor, query);
                 if (!found) break;
                 const auto index = static_cast<std::size_t>(found - buffer.data());
                 on_hit({root / relative, base + index, query.size(),

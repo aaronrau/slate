@@ -35,6 +35,11 @@ struct SlateApp: App {
                 .onAppear {
                     #if os(macOS)
                     delegate.model = model
+                    // Before restore: a file opened from Finder wins over the last visit.
+                    delegate.openURL = { [weak model, weak workspace] url in
+                        if url.hasDirectoryPath { workspace?.open(folder: url) }
+                        else { model?.openExternal(url) }
+                    }
                     #endif
                     model.restore()
                 }
@@ -223,6 +228,32 @@ private func canLeaveEditor(_ model: EditorModel, afterSave: @escaping () -> Voi
 
 final class SlateAppDelegate: NSObject, NSApplicationDelegate {
     weak var model: EditorModel?
+    // Finder, Open With and `open` deliver files here, not to onOpenURL, and on a
+    // cold launch before the window exists: hold the latest until it appears.
+    var openURL: ((URL) -> Void)? { didSet { deliver() } }
+    private var pending: URL?
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard let url = urls.last else { return }
+        pending = url
+        deliver()
+        // A launch to open a file skips the untitled window SwiftUI shows at startup,
+        // and after the last window closed there is none: ask SwiftUI for one.
+        DispatchQueue.main.async {
+            if let window = NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) {
+                window.makeKeyAndOrderFront(nil)
+            } else {
+                _ = NSApp.delegate?.applicationOpenUntitledFile?(NSApp)
+            }
+        }
+    }
+
+    private func deliver() {
+        guard let openURL, let url = pending else { return }
+        pending = nil
+        openURL(url)
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let model else { return .terminateNow }
         return canLeaveEditor(model) { sender.terminate(nil) } ? .terminateNow : .terminateCancel
