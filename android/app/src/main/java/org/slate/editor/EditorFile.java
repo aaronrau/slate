@@ -4,10 +4,12 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract.Document;
 import android.system.Os;
 import android.system.OsConstants;
+import android.system.StructStat;
 
 import java.io.*;
 
@@ -17,7 +19,36 @@ final class EditorFile implements AutoCloseable {
     Uri uri;
     boolean dirty;
     private File backing;
-    private Metadata opened;
+    private Revision opened;
+
+    private record FileStamp(long device, long inode, long size, long seconds, long nanos) {}
+    private record Revision(Metadata row, FileStamp file) {
+        boolean changed(Revision current) {
+            // A MediaStore catalog row may be indexed after its bytes are already
+            // visible. The opened file and its directory entry are authoritative.
+            if (file != null && current.file != null) return !file.equals(current.file);
+            return row.changed(current.row);
+        }
+    }
+
+    private static FileStamp stamp(ParcelFileDescriptor fd) throws IOException {
+        try {
+            StructStat stat = Os.fstat(fd.getFileDescriptor());
+            if (!OsConstants.S_ISREG(stat.st_mode)) return null;
+            long nanos = Build.VERSION.SDK_INT >= 27 ? stat.st_mtim.tv_nsec : 0;
+            return new FileStamp(stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime, nanos);
+        } catch (android.system.ErrnoException e) { throw new IOException(e); }
+    }
+
+    private static Revision revision(ContentResolver resolver, Uri uri, boolean inspectFile) throws IOException {
+        Metadata row = metadata(resolver, uri);
+        if (inspectFile) {
+            try (ParcelFileDescriptor fd = resolver.openFileDescriptor(uri, "r")) {
+                if (fd != null) return new Revision(row, stamp(fd));
+            }
+        }
+        return new Revision(row, null);
+    }
 
     record Metadata(String name, Long size, Long modified) {
         boolean changed(Metadata current) {
@@ -39,6 +70,8 @@ final class EditorFile implements AutoCloseable {
                 i = c.getColumnIndex(Document.COLUMN_LAST_MODIFIED);
                 if (i >= 0 && !c.isNull(i)) modified = c.getLong(i);
             }
+        } catch (SecurityException ignored) {
+            // Save As can grant write-only access. Such providers may decline a query.
         }
         return new Metadata(name == null ? "Document" : name, size, modified);
     }
@@ -48,17 +81,13 @@ final class EditorFile implements AutoCloseable {
         try {
             file.uri = uri;
             ContentResolver resolver = context.getContentResolver();
-            file.opened = metadata(resolver, uri);
-            file.name = file.opened.name;
+            Metadata row = metadata(resolver, uri);
+            file.name = row.name;
             try (ParcelFileDescriptor fd = resolver.openFileDescriptor(uri, "r")) {
                 if (fd == null) throw new IOException("Provider could not open this file");
-                boolean regular;
-                try {
-                    regular = OsConstants.S_ISREG(Os.fstat(fd.getFileDescriptor()).st_mode);
-                } catch (android.system.ErrnoException error) {
-                    throw new IOException(error);
-                }
-                if (regular) {
+                FileStamp source = stamp(fd);
+                file.opened = new Revision(row, source);
+                if (source != null) {
                     file.document.open(fd.getFd());
                 } else {
                     file.backing = File.createTempFile("slate-stream-", ".tmp", context.getCacheDir());
@@ -79,7 +108,7 @@ final class EditorFile implements AutoCloseable {
     void save(Context context, Uri destination) throws IOException {
         ContentResolver resolver = context.getContentResolver();
         boolean same = destination.equals(uri);
-        Metadata target = metadata(resolver, destination);
+        Revision target = revision(resolver, destination, same && opened != null && opened.file != null);
         if (same && opened != null && opened.changed(target))
             throw new IOException("This file changed in storage. Use Save as to keep your edits.");
 
@@ -96,7 +125,7 @@ final class EditorFile implements AutoCloseable {
         } else {
             document.save(backing);
         }
-        if (target.changed(metadata(resolver, destination)))
+        if (target.changed(revision(resolver, destination, target.file != null)))
             throw new IOException("The destination changed during save. Try Save as.");
 
         try (FileInputStream input = new FileInputStream(backing);
@@ -104,23 +133,24 @@ final class EditorFile implements AutoCloseable {
             if (output == null) throw new IOException("Provider declined the write");
             transfer(input, output);
         } catch (IOException e) {
-            if (same) opened = metadata(resolver, destination);
+            if (same) opened = revision(resolver, destination, target.file != null);
             throw new IOException("Save did not finish. Your edited copy is still open. " + e.getMessage(), e);
         }
-        opened = metadata(resolver, destination);
-        name = opened.name;
+        opened = new Revision(metadata(resolver, destination), null);
+        name = opened.row.name;
         uri = destination;
         dirty = false;
         // Regular providers can become the backing again, releasing staging disk
         // space immediately. A pipe or unavailable read handle keeps the stage.
         try (ParcelFileDescriptor fd = resolver.openFileDescriptor(uri, "r")) {
-            if (fd != null && fd.getStatSize() == document.size()
-                    && OsConstants.S_ISREG(Os.fstat(fd.getFileDescriptor()).st_mode)) {
+            FileStamp saved = fd == null ? null : stamp(fd);
+            if (saved != null && saved.size == document.size()) {
                 document.open(fd.getFd());
+                opened = new Revision(opened.row, saved);
                 backing.delete();
                 backing = null;
             }
-        } catch (IOException | SecurityException | IllegalStateException | android.system.ErrnoException ignored) {
+        } catch (IOException | SecurityException | IllegalStateException ignored) {
             // The complete staged model remains usable after the successful write.
         }
     }

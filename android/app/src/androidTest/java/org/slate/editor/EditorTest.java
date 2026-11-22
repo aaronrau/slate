@@ -56,6 +56,12 @@ public final class EditorTest extends ActivityInstrumentationTestCase2<MainActiv
             describe(window, details);
             return null;
         });
+        android.view.accessibility.AccessibilityNodeInfo active =
+            getInstrumentation().getUiAutomation().getRootInActiveWindow();
+        if (active != null) {
+            for (android.view.accessibility.AccessibilityNodeInfo node : active.findAccessibilityNodeInfosByViewId("android:id/message"))
+                details.append(" dialog=").append(node.getText());
+        }
         fail("Timed out waiting for " + state + "." + details);
     }
 
@@ -76,10 +82,39 @@ public final class EditorTest extends ActivityInstrumentationTestCase2<MainActiv
         metadata.put(MediaStore.MediaColumns.DISPLAY_NAME, "Slate test " + System.nanoTime() + ext);
         metadata.put(MediaStore.MediaColumns.MIME_TYPE, ext.equals(".md") ? "text/markdown" : "text/plain");
         metadata.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/");
+        metadata.put(MediaStore.MediaColumns.IS_PENDING, 1);
         Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, metadata);
         assertNotNull(uri);
         try (OutputStream stream = resolver.openOutputStream(uri, "wt")) { stream.write(data); }
+        metadata.clear();
+        metadata.put(MediaStore.MediaColumns.IS_PENDING, 0);
+        assertEquals(1, resolver.update(uri, metadata, null, null));
         return uri;
+    }
+
+    public void testConcurrentProviderWriteIsPreserved() throws Exception {
+        if (Build.VERSION.SDK_INT < 29) return;
+        Context context = getInstrumentation().getTargetContext();
+        ContentResolver resolver = context.getContentResolver();
+        Uri uri = create(".txt", "original".getBytes(UTF_8));
+        try (EditorFile editor = EditorFile.open(context, uri)) {
+            editor.document.replace(0, 8, "edited".getBytes(UTF_8));
+            try (OutputStream output = resolver.openOutputStream(uri, "wt")) {
+                output.write("another writer".getBytes(UTF_8));
+            }
+            try {
+                editor.save(context, uri);
+                fail("Saving after an external write must report a conflict");
+            } catch (IOException expected) {
+                assertTrue(expected.getMessage().contains("changed in storage"));
+            }
+            try (java.io.DataInputStream input = new java.io.DataInputStream(resolver.openInputStream(uri))) {
+                byte[] bytes = new byte[14];
+                input.readFully(bytes);
+                assertEquals("another writer", new String(bytes, UTF_8));
+                assertEquals(-1, input.read());
+            }
+        } finally { resolver.delete(uri, null, null); }
     }
 
     public void testUnboundedHistoryBranchAndPersistedPosition() {
