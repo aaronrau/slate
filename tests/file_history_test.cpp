@@ -5,6 +5,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <unistd.h>
 
 namespace fs = std::filesystem;
 

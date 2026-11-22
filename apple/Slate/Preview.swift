@@ -14,6 +14,7 @@ struct PreviewContent: Equatable {
 
 final class PreviewController: NSObject, WKNavigationDelegate {
     private var ready = false
+    private var restartAttempted = false
     private var pending: PreviewContent?
     private var displayed: PreviewContent?
     private let entry = Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "preview")
@@ -42,7 +43,9 @@ final class PreviewController: NSObject, WKNavigationDelegate {
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         ready = false
-        if let entry { webView.loadFileURL(entry, allowingReadAccessTo: entry.deletingLastPathComponent()) }
+        guard !restartAttempted, let entry else { return }
+        restartAttempted = true
+        webView.loadFileURL(entry, allowingReadAccessTo: entry.deletingLastPathComponent())
     }
 
     private func render(_ view: WKWebView) {

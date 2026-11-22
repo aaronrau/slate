@@ -132,6 +132,11 @@ def exercise(binary, directory):
         xdo("windowfocus", "--sync", window)
         key("alt+Left")
         at_file(first.name)
+        key("alt+Right")
+        at_file(huge.name)
+        first.unlink()
+        key("alt+Left")
+        at_file(target.name)
         key("ctrl+w")
         assert proc.wait(timeout=5) == 0
     finally:

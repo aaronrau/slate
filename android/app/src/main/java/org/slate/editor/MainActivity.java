@@ -65,7 +65,7 @@ public final class MainActivity extends Activity {
             persist(launch, getIntent());
             requestOpen(launch, -1, 0, null);
         } else if ((state == null || !state.getBoolean("untitled")) && last != null) {
-            requestOpen(last.uri(), last.offset(), 0, last);
+            followHistory(last, -1);
         }
     }
 
@@ -158,18 +158,30 @@ public final class MainActivity extends Activity {
         editor.setHorizontallyScrolling(false);
         editor.setSaveEnabled(false);
         editor.setHint("Write here…");
+        editor.setFilters(new InputFilter[]{(source, from, to, dest, dstart, dend) -> {
+            if (!loading && to - from > 1024 * 1024) {
+                toast("Paste up to 1 MiB of text at a time.");
+                return dest.subSequence(dstart, dend);
+            }
+            return null;
+        }});
         editor.addTextChangedListener(new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            int changedAt, removed, inserted;
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+                changedAt = start;
+                removed = count;
+                inserted = after;
+            }
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
             @Override public void afterTextChanged(Editable s) {
-                if (!loading && !busy) applyText(s.toString());
+                if (!loading && !busy) applyText(s.toString(), changedAt, removed, inserted);
             }
         });
         body.addView(editor, -1, -1);
         footer = row();
         footer.setPadding(dp(6), 0, dp(6), 0);
         root.addView(footer);
-        previous = button(footer, "‹", "Previous page", () -> showPage(Math.max(0, start - 4), 0));
+        previous = button(footer, "‹", "Previous page", () -> showPage(Math.max(0, start - (previewing ? PREVIEW_PAGE : SOURCE_PAGE)), 0, true));
         status = new TextView(this);
         status.setTextSize(12);
         status.setPadding(dp(6), 0, dp(6), 0);
@@ -185,7 +197,7 @@ public final class MainActivity extends Activity {
                 if (!busy) showPage(Math.round((bar.getProgress() / 10000.0) * file.document.size()), 0);
             }
         });
-        next = button(footer, "›", "Next page", () -> showPage(end, 0));
+        next = button(footer, "›", "Next page", () -> showPage(end, 0, true));
     }
 
     private final class TabAdapter extends BaseAdapter {
@@ -229,7 +241,31 @@ public final class MainActivity extends Activity {
 
     private void travel(int delta) {
         Navigation.Place p = navigation.relative(currentTab == 0 && delta < 0 ? 0 : delta);
-        if (p != null) requestOpen(p.uri(), p.offset(), 0, p);
+        if (p != null) followHistory(p, delta);
+    }
+
+    private record HistoryTarget(EditorFile file, Navigation.Place place) {}
+
+    private void followHistory(Navigation.Place place, int direction) {
+        leave(() -> {
+            remember();
+            runIO(() -> {
+                Navigation.Place target = place;
+                while (target != null && !isDestroyed()) {
+                    try {
+                        return new HistoryTarget(EditorFile.open(this, target.uri()), target);
+                    } catch (java.io.FileNotFoundException | SecurityException gone) {
+                        navigation.unavailable(target.tab());
+                        target = navigation.from(target.visit(), direction);
+                    }
+                }
+                return null;
+            }, result -> {
+                if (result == null) { toast("The file is no longer available."); return; }
+                Navigation.Place target = result.place();
+                install(result.file(), target.offset(), 0, target);
+            });
+        });
     }
 
     private void paint() {
@@ -271,14 +307,19 @@ public final class MainActivity extends Activity {
     }
 
     private void showPage(long offset, int selectedBytes) {
+        showPage(offset, selectedBytes, false);
+    }
+
+    private void showPage(long offset, int selectedBytes, boolean atPageStart) {
         long size = file.document.size();
         long point = Math.max(0, Math.min(size, offset));
         int unit = previewing ? PREVIEW_PAGE : SOURCE_PAGE;
         long page = Math.min(point, Math.max(0, size - 1)) / unit;
         try {
-            long first = boundary(page * unit);
-            if (first > point && page > 0) first = boundary(--page * unit);
-            long last = boundary(size - page * unit <= unit ? size : (page + 1) * unit);
+            long nominal = atPageStart ? point : page * unit;
+            long first = boundary(nominal);
+            if (!atPageStart && first > point && page > 0) { nominal -= unit; first = boundary(nominal); }
+            long last = boundary(size - nominal <= unit ? size : nominal + unit);
             byte[] bytes = file.document.read(first, (int)(last - first));
             String text = new String(bytes, UTF_8);
             readable = Arrays.equals(bytes, text.getBytes(UTF_8));
@@ -352,13 +393,17 @@ public final class MainActivity extends Activity {
         showPage(offset, 0);
     }
 
-    private void applyText(String updated) {
+    private void applyText(String updated, int begin, int oldCount, int newCount) {
         if (pageText.equals(updated)) return;
-        int begin = 0, a = pageText.length(), b = updated.length();
-        if (!wholeSelection) {
-            while (begin < a && begin < b && pageText.charAt(begin) == updated.charAt(begin)) begin++;
+        int a = begin + oldCount, b = begin + newCount;
+        if (wholeSelection) {
+            begin = 0;
+            a = pageText.length();
+            b = updated.length();
+        } else {
+            // Some input methods modify one half of a surrogate pair. Include
+            // the unchanged half when calculating the corresponding UTF-8 edit.
             if (begin > 0 && Character.isHighSurrogate(pageText.charAt(begin - 1))) begin--;
-            while (a > begin && b > begin && pageText.charAt(a - 1) == updated.charAt(b - 1)) { a--; b--; }
             if (a < pageText.length() && Character.isLowSurrogate(pageText.charAt(a))) { a++; b++; }
         }
         long offset = start + pageText.substring(0, begin).getBytes(UTF_8).length;
@@ -413,6 +458,10 @@ public final class MainActivity extends Activity {
     private class SourceEditor extends EditText {
         SourceEditor() { super(MainActivity.this); }
         @Override public boolean onTextContextMenuItem(int id) {
+            if (id == android.R.id.undo || id == android.R.id.redo) {
+                changeHistory(id == android.R.id.undo);
+                return true;
+            }
             if (id == android.R.id.selectAll && (start != 0 || end < file.document.size())) {
                 selectAll();
                 wholeSelection = true;
@@ -522,17 +571,21 @@ public final class MainActivity extends Activity {
         leave(() -> {
             remember();
             runIO(() -> EditorFile.open(this, target), opened -> {
-                file.close();
-                file = opened;
-                undo.clear(); redo.clear(); undoBytes = 0;
-                previewing = markdown() && (place != null ? place.preview() : offset < 0);
-                long point = Math.max(0, offset);
-                if (place != null && place.visit() != 0) navigation.activate(place.visit());
-                else navigation.visit(target, file.name, point, previewing);
-                updateTabs();
-                showPage(point, select);
+                install(opened, offset, select, place);
             });
         });
+    }
+
+    private void install(EditorFile opened, long offset, int select, Navigation.Place place) {
+        file.close();
+        file = opened;
+        undo.clear(); redo.clear(); undoBytes = 0;
+        previewing = markdown() && (place != null ? place.preview() : offset < 0);
+        long point = Math.max(0, offset);
+        if (place != null && place.visit() != 0) navigation.activate(place.visit());
+        else navigation.visit(file.uri, file.name, point, previewing);
+        updateTabs();
+        showPage(point, select);
     }
 
     private void save(boolean saveAs, Runnable after) {
@@ -565,6 +618,7 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     if (isDestroyed()) {
                         if (value instanceof EditorFile abandoned) abandoned.close();
+                        if (value instanceof HistoryTarget abandoned) abandoned.file().close();
                         return;
                     }
                     busy = false;
@@ -618,9 +672,8 @@ public final class MainActivity extends Activity {
     @Override protected void onDestroy() {
         workspace.close();
         removePreview();
-        navigation.close();
         EditorFile release = file;
-        io.execute(release::close);
+        io.execute(() -> { release.close(); navigation.close(); });
         io.shutdown();
         super.onDestroy();
     }

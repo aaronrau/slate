@@ -50,7 +50,7 @@ final class SlateTests: XCTestCase {
         for index in [0, 1, 0, 1] { history.record(files[index]) }
         let prior = try XCTUnwrap(history.back)
         history.record(files[0], at: prior)
-        XCTAssertEqual(history.tab(atVisit: try XCTUnwrap(history.forward)).name, "b")
+        XCTAssertEqual(history.tab(atVisit: try XCTUnwrap(history.forward))?.name, "b")
         history.record(files[2])
         history.remember(caret: 4099, preview: true)
         XCTAssertNil(history.forward)
@@ -59,7 +59,7 @@ final class SlateTests: XCTestCase {
         let current = try XCTUnwrap(restored.active)
         XCTAssertEqual(restored.tabs[current].caret, 4099)
         XCTAssertTrue(restored.tabs[current].preview)
-        XCTAssertEqual(restored.tab(atVisit: try XCTUnwrap(restored.back)).name, "a")
+        XCTAssertEqual(restored.tab(atVisit: try XCTUnwrap(restored.back))?.name, "a")
     }
 
     @MainActor

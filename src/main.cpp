@@ -336,9 +336,23 @@ class Window {
         });
     }
 
+    static bool available(const fs::path& path) {
+        std::error_code error;
+        return path.empty() || fs::is_regular_file(path, error);
+    }
+
+    std::optional<HistoryFile> available_visit(bool forward) const {
+        std::int64_t from = 0;
+        while (auto dest = forward ? history_.next(from) : history_.previous(from)) {
+            if (available(dest->path)) return dest;
+            from = dest->visit;
+        }
+        return {};
+    }
+
     void navigate(bool forward) {
-        if (auto dest = forward ? history_.next() : history_.previous())
-            open_file(dest->path, 0, 0, true, {}, dest->visit);
+        if (auto dest = available_visit(forward)) open_file(dest->path, 0, 0, true, {}, dest->visit);
+        else error("The files in this direction are no longer available.");
     }
 
     std::optional<fs::path> adjacent_tab(int step) const {
@@ -637,11 +651,16 @@ public:
     }
 
     void show(const std::optional<fs::path>& file) {
-        std::optional<HistoryFile> saved = history_.current();
         if (file) open_file(*file, 0, 0, true);
-        else if (saved && (saved->path.empty() || fs::is_regular_file(saved->path)))
-            open_file(saved->path, 0, 0, true, {}, saved->visit);
-        else open_file({}, 0, 0, true);
+        else {
+            auto saved = history_.current();
+            if (saved && !available(saved->path)) {
+                saved = available_visit(false);
+                if (!saved) saved = available_visit(true);
+            }
+            if (saved) open_file(saved->path, 0, 0, true, {}, saved->visit);
+            else open_file({}, 0, 0, true);
+        }
         gtk_widget_show(win_);
         focus_document();
     }

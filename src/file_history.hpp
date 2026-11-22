@@ -25,8 +25,8 @@ public:
     FileHistory& operator=(const FileHistory&) = delete;
 
     std::optional<HistoryFile> current() const;
-    std::optional<HistoryFile> previous() const;
-    std::optional<HistoryFile> next() const;
+    std::optional<HistoryFile> previous(std::int64_t from = 0) const;
+    std::optional<HistoryFile> next(std::int64_t from = 0) const;
     std::optional<HistoryFile> position(const std::filesystem::path& path) const;
     std::vector<HistoryFile> nearby_tabs() const;
     void remember(const std::filesystem::path& path, std::uint64_t cursor, bool preview);

@@ -18,7 +18,8 @@ jobs:
       - name: Run editor tests
         run: |
           xcodebuild test -project apple/Slate.xcodeproj -scheme Slate \
-            -destination 'platform=macOS' -parallel-testing-enabled NO CODE_SIGN_IDENTITY=-
+            -destination 'platform=macOS' -parallel-testing-enabled NO CODE_SIGN_IDENTITY=- \
+            -resultBundlePath "$RUNNER_TEMP/macOS.xcresult"
       - name: Build and launch the universal app
         run: |
           xcodebuild build -project apple/Slate.xcodeproj -scheme Slate -configuration Release \
@@ -37,6 +38,14 @@ jobs:
           name: Slate-macOS
           path: ${{ runner.temp }}/Slate-macOS.zip
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: macOS-test-diagnostics
+          path: |
+            ${{ runner.temp }}/macOS.xcresult
+            ~/Library/Logs/DiagnosticReports/Slate*.ips
+            ~/Library/Logs/DiagnosticReports/com.apple.WebKit*.ips
 
   ios:
     name: iPhone and iPad app
@@ -52,9 +61,13 @@ jobs:
             device=$(xcrun simctl list devices available -j | jq -er --arg family "$family" \
               '[.devices | to_entries[] | select(.key | contains(".iOS-")) | .value[] |
                 select(.isAvailable and (.name | startswith($family)))] | first.udid')
+            echo "SIMULATOR_UDID=$device" >> "$GITHUB_ENV"
+            # Xcode 16.4's iOS 18.5 simulator misses the WebKit Swift overlay when
+            # linking for earlier OS versions (WebKit issue 293831).
             xcodebuild test -project apple/Slate.xcodeproj -scheme Slate \
               -configuration Debug -destination "platform=iOS Simulator,id=$device" \
-              -derivedDataPath "$build" -parallel-testing-enabled NO
+              -derivedDataPath "$build" -parallel-testing-enabled NO \
+              -resultBundlePath "$RUNNER_TEMP/$family.xcresult" IPHONEOS_DEPLOYMENT_TARGET=18.4
             xcrun simctl bootstatus "$device" -b
             xcrun simctl install "$device" "$app"
             bundle=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Info.plist")
@@ -75,6 +88,21 @@ jobs:
           name: Slate-iOS
           path: ${{ runner.temp }}/Slate-iOS-*.zip
           if-no-files-found: error
+      - name: Collect simulator crash diagnostics
+        if: failure()
+        run: |
+          if [[ -n "${SIMULATOR_UDID:-}" ]]; then
+            xcrun simctl spawn "$SIMULATOR_UDID" log show --last 10m --style compact \
+              --predicate 'process == "Slate"' > "$RUNNER_TEMP/Slate-simulator.log" || true
+          fi
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: iOS-test-diagnostics
+          path: |
+            ${{ runner.temp }}/*.xcresult
+            ${{ runner.temp }}/Slate-simulator.log
+            ~/Library/Logs/DiagnosticReports/Slate*.ips
 
   android:
     name: Android app

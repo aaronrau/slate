@@ -62,6 +62,42 @@ public final class EditorTest extends ActivityInstrumentationTestCase2<MainActiv
         return uri;
     }
 
+    public void testUnboundedHistoryBranchAndPersistedPosition() {
+        Context context = getInstrumentation().getTargetContext();
+        String dbName = "test-navigation-" + System.nanoTime();
+        Uri a = Uri.parse("content://test/a"), b = Uri.parse("content://test/b"), c = Uri.parse("content://test/c");
+        try {
+            try (Navigation history = new Navigation(context, dbName)) {
+                android.database.sqlite.SQLiteDatabase db = history.getWritableDatabase();
+                db.beginTransaction();
+                try {
+                    for (int i = 0; i < 4096; i++) {
+                        Uri target = (i % 2 == 0) ? a : b;
+                        history.visit(target, target.getLastPathSegment(), ((long)i << 32), i % 2 == 1);
+                    }
+                    db.setTransactionSuccessful();
+                } finally { db.endTransaction(); }
+                assertEquals(2, history.tabCount());
+                assertEquals(4096L, history.relative(0).visit());
+                history.activate(history.relative(-1).visit());
+                history.activate(history.relative(-1).visit());
+                history.visit(c, "C", 756L, true);
+                assertEquals(3, history.tabCount());
+                assertNull(history.relative(1));
+                assertEquals(4095L, history.relative(0).visit());
+                history.unavailable(history.relative(-1).tab());
+                assertEquals(a, history.relative(-1).uri());
+            }
+            try (Navigation restored = new Navigation(context, dbName)) {
+                assertEquals(c, restored.relative(0).uri());
+                assertTrue(restored.relative(0).preview());
+                assertEquals(756L, restored.relative(0).offset());
+                assertEquals(b, restored.relative(-1).uri());
+                assertEquals((4093L << 32), restored.relative(-1).offset());
+            }
+        } finally { context.deleteDatabase(dbName); }
+    }
+
     public void testNativeSparseDescriptorAndUtf8Edits() throws Exception {
         Context context = getInstrumentation().getTargetContext();
         File input = File.createTempFile("slate-test", ".txt", context.getCacheDir());
@@ -99,7 +135,9 @@ public final class EditorTest extends ActivityInstrumentationTestCase2<MainActiv
                 + "```mermaid\nflowchart LR\nA-->B\n```\n").getBytes(UTF_8));
         ContentResolver resolver = getInstrumentation().getTargetContext().getContentResolver();
         try {
+            setActivityIntent(new Intent(Intent.ACTION_EDIT, a));
             MainActivity activity = getActivity();
+            await(() -> view(Button.class, "More options").isEnabled() && view(EditText.class, null) != null && view(EditText.class, null).length() == 32768);
             onUi(() -> { activity.requestOpen(a, 43500, 0, null); return null; });
             await(() -> view(EditText.class, null) != null && view(EditText.class, null).length() == 44000 - 32768);
             onUi(() -> {

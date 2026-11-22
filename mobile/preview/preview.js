@@ -70,8 +70,8 @@
     const version = ++revision;
     const dark = colors.dark !== false;
     const theme = dark
-      ? {background:"#101010", surface:"#242424", text:"#e7e7e7", accent:"#ccc", muted:"#aaa", border:"#505050"}
-      : {background:"#fbfbfb", surface:"#eee", text:"#252525", accent:"#444", muted:"#626262", border:"#bbb"};
+      ? {background:"#101010", surface:"#242424", text:"#e7e7e7", accent:"#ccc", muted:"#aaa", border:"#505050", code:"#d2d2d2"}
+      : {background:"#fbfbfb", surface:"#eee", text:"#252525", accent:"#444", muted:"#626262", border:"#bbb", code:"#444444"};
     const style = document.documentElement.style;
     style.colorScheme = dark ? "dark" : "light";
     for (const key of Object.keys(theme)) {

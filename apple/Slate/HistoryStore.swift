@@ -37,8 +37,9 @@ final class HistoryStore {
         body(statement)
     }
 
-    func load() -> ([NavigationHistory.Tab], [Int], Int, Bool) {
-        var tabs: [NavigationHistory.Tab] = [], visits: [Int] = []
+    func load() -> ([NavigationHistory.Tab], Int, Int, Bool) {
+        var tabs: [NavigationHistory.Tab] = []
+        var last = -1
         var position = -1, showing = false
         statement("SELECT id,file,caret,preview FROM tabs ORDER BY id") { stmt in
             while sqlite3_step(stmt) == SQLITE_ROW {
@@ -50,11 +51,9 @@ final class HistoryStore {
                                   preview: sqlite3_column_int(stmt, 3) != 0))
             }
         }
-        statement("SELECT tab FROM visits ORDER BY position") { stmt in
-            while sqlite3_step(stmt) == SQLITE_ROW {
-                let tab = Int(sqlite3_column_int64(stmt, 0))
-                guard tabs.indices.contains(tab) else { break }
-                visits.append(tab)
+        statement("SELECT MAX(position) FROM visits") { stmt in
+            if sqlite3_step(stmt) == SQLITE_ROW, sqlite3_column_type(stmt, 0) != SQLITE_NULL {
+                last = Int(sqlite3_column_int64(stmt, 0))
             }
         }
         statement("SELECT position,showing FROM state WHERE id=1") { stmt in
@@ -63,8 +62,17 @@ final class HistoryStore {
                 showing = sqlite3_column_int(stmt, 1) != 0
             }
         }
-        position = min(max(0, position), visits.count - 1)
-        return (tabs, visits, position, showing && position >= 0)
+        position = min(max(0, position), last)
+        return (tabs, last, position, showing && position >= 0)
+    }
+
+    func tabID(at visit: Int) -> Int? {
+        var tab: Int?
+        statement("SELECT tab FROM visits WHERE position=?") { stmt in
+            sqlite3_bind_int64(stmt, 1, Int64(visit))
+            if sqlite3_step(stmt) == SQLITE_ROW { tab = Int(sqlite3_column_int64(stmt, 0)) }
+        }
+        return tab
     }
 
     func record(tab: NavigationHistory.Tab, position: Int, appended: Bool) {

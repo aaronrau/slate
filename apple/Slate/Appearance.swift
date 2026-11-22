@@ -9,7 +9,7 @@ typealias NativeColor = UIColor
 #endif
 
 enum Ink: String, CaseIterable, Identifiable {
-    case background, surface, text, muted, accent, border
+    case background, surface, text, muted, accent, code, border
     var id: Self { self }
 
     var label: String {
@@ -19,6 +19,7 @@ enum Ink: String, CaseIterable, Identifiable {
         case .text: return "Text"
         case .muted: return "Secondary text"
         case .accent: return "Accent"
+        case .code: return "Code text"
         case .border: return "Dividers"
         }
     }
@@ -26,12 +27,13 @@ enum Ink: String, CaseIterable, Identifiable {
     func initial(dark: Bool) -> String {
         let values: (String, String)
         switch self {
-        case .background: values = ("#18191b", "#ffffff")
-        case .surface: values = ("#202225", "#f4f5f6")
-        case .text: values = ("#eeefed", "#202327")
-        case .muted: values = ("#a8acb2", "#626871")
-        case .accent: values = ("#9ac6ff", "#255ea7")
-        case .border: values = ("#383a3e", "#d6d9dd")
+        case .background: values = ("#101010", "#fbfbfb")
+        case .surface: values = ("#191919", "#efefef")
+        case .text: values = ("#e7e7e7", "#252525")
+        case .muted: values = ("#a6a6a6", "#626262")
+        case .accent: values = ("#c8c8c8", "#484848")
+        case .code: values = ("#d2d2d2", "#555555")
+        case .border: values = ("#383838", "#d6d6d6")
         }
         return dark ? values.0 : values.1
     }

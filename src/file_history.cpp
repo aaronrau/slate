@@ -58,10 +58,10 @@ constexpr auto current_sql =
     "JOIN files f ON f.id=v.file";
 constexpr auto previous_sql =
     "SELECT f.path,f.cursor,f.preview,v.id FROM visits v JOIN files f ON f.id=v.file "
-    "WHERE v.id<(SELECT here FROM state) ORDER BY v.id DESC LIMIT 1";
+    "WHERE v.id<coalesce(nullif(?,0),(SELECT here FROM state)) ORDER BY v.id DESC LIMIT 1";
 constexpr auto next_sql =
     "SELECT f.path,f.cursor,f.preview,v.id FROM visits v JOIN files f ON f.id=v.file "
-    "WHERE v.id>(SELECT here FROM state) ORDER BY v.id LIMIT 1";
+    "WHERE v.id>coalesce(nullif(?,0),(SELECT here FROM state)) ORDER BY v.id LIMIT 1";
 
 } // namespace
 
@@ -96,8 +96,16 @@ void FileHistory::initialize(const std::filesystem::path& path) {
 FileHistory::~FileHistory() { sqlite3_close(db_); }
 
 std::optional<HistoryFile> FileHistory::current() const { return Statement(db_, current_sql).one(); }
-std::optional<HistoryFile> FileHistory::previous() const { return Statement(db_, previous_sql).one(); }
-std::optional<HistoryFile> FileHistory::next() const { return Statement(db_, next_sql).one(); }
+std::optional<HistoryFile> FileHistory::previous(std::int64_t from) const {
+    Statement q(db_, previous_sql);
+    q.number(1, from);
+    return q.one();
+}
+std::optional<HistoryFile> FileHistory::next(std::int64_t from) const {
+    Statement q(db_, next_sql);
+    q.number(1, from);
+    return q.one();
+}
 std::optional<HistoryFile> FileHistory::position(const std::filesystem::path& path) const {
     Statement q(db_, "SELECT path,cursor,preview,0 FROM files WHERE path=?");
     q.path(1, path);

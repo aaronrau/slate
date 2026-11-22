@@ -15,6 +15,7 @@ final class EditorModel: ObservableObject {
     @Published private(set) var pageRevision = 0
     let history = NavigationHistory(store: .applicationStore())
     private var attemptedRestore = false
+    private var pendingOpen: ScopedURL?
     private var document = Document()
     private var revision: FileRevision?
     private var discardAction: (() -> Void)?
@@ -43,6 +44,14 @@ final class EditorModel: ObservableObject {
         history.remember(caret: page.start + UInt64(prefix.utf8.count), preview: preview)
     }
 
+    #if os(macOS)
+    func closedWindow() {
+        rememberPosition()
+        install(Document(), file: nil, revision: nil, page: TextPage())
+        attemptedRestore = false
+    }
+    #endif
+
     func restore() {
         guard !attemptedRestore else { return }
         attemptedRestore = true
@@ -57,6 +66,19 @@ final class EditorModel: ObservableObject {
         }
     }
 
+    func openExternal(_ url: URL) {
+        attemptedRestore = true
+        if busy {
+            pendingOpen = ScopedURL(url)
+        } else { open(url) }
+    }
+
+    func resumePendingOpen() {
+        guard !busy, let pendingOpen else { return }
+        self.pendingOpen = nil
+        protectChanges { [self] in load(pendingOpen) }
+    }
+
     func open(_ url: URL, workspace: ScopedURL? = nil, offset: UInt64? = nil, length: Int = 0) {
         let access = ScopedURL(url, parent: workspace)
         // Search within the live document retains current edits. Disk offsets only
@@ -69,7 +91,9 @@ final class EditorModel: ObservableObject {
         protectChanges { [self] in load(access, offset: offset, length: length) }
     }
 
-    func navigate(visit: Int) { showTab(history.tab(atVisit: visit), visit: visit) }
+    func navigate(visit: Int) {
+        if let tab = history.tab(atVisit: visit) { showTab(tab, visit: visit) }
+    }
 
     func showTab(_ tab: NavigationHistory.Tab, visit: Int? = nil) {
         guard visit != nil || history.active != tab.id else { return }
@@ -171,7 +195,7 @@ final class EditorModel: ObservableObject {
         if let file { save(to: file) } else { needsSaveAs = true }
     }
 
-    func save(to target: ScopedURL) {
+    func save(to target: ScopedURL, onSaved: @escaping () -> Void = {}) {
         guard !busy else { return }
         do {
             let snapshot = try document.snapshot()
@@ -187,6 +211,7 @@ final class EditorModel: ObservableObject {
                         self.file = target
                         self.history.record(target)
                         self.dirty = false
+                        onSaved()
                     } catch { self.errorMessage = error.localizedDescription }
                 }
             }
