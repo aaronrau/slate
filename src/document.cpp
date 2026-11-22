@@ -67,9 +67,13 @@ Revision inspect(int fd) {
     return revision(info);
 }
 
-bool operator==(const Revision& a, const Revision& b) {
+bool sameContentRevision(const Revision& a, const Revision& b) {
     return a.device == b.device && a.inode == b.inode && a.length == b.length &&
-           a.modified.tv_sec == b.modified.tv_sec && a.modified.tv_nsec == b.modified.tv_nsec &&
+           a.modified.tv_sec == b.modified.tv_sec && a.modified.tv_nsec == b.modified.tv_nsec;
+}
+
+bool operator==(const Revision& a, const Revision& b) {
+    return sameContentRevision(a, b) &&
            a.changed.tv_sec == b.changed.tv_sec && a.changed.tv_nsec == b.changed.tv_nsec;
 }
 
@@ -97,12 +101,16 @@ void writeFully(int fd, const char* data, std::size_t count, Offset offset) {
     }
 }
 
+enum class FileOrigin { path, provider };
+
 class File {
     Descriptor fd_;
+    FileOrigin origin_;
 
 public:
     Revision original;
-    explicit File(Descriptor fd) : fd_(std::move(fd)), original(inspect(fd_.get())) {
+    File(Descriptor fd, FileOrigin origin)
+        : fd_(std::move(fd)), origin_(origin), original(inspect(fd_.get())) {
         if (!S_ISREG(original.mode)) throw std::runtime_error("Choose a regular file");
     }
 
@@ -134,7 +142,11 @@ public:
     }
 
     void verify() const {
-        if (!(inspect(fd_.get()) == original)) {
+        const auto now = inspect(fd_.get());
+        // A document provider can change metadata while cataloging an open file.
+        const bool unchanged = origin_ == FileOrigin::provider
+            ? sameContentRevision(now, original) : now == original;
+        if (!unchanged) {
             throw std::runtime_error("File changed on disk. Reopen it before saving.");
         }
     }
@@ -387,8 +399,8 @@ struct Document::State {
     bool dirty = false;
 
     State() = default;
-    State(Descriptor fd, fs::path display, fs::path absolute = {}, fs::path physical = {})
-        : file(std::make_shared<File>(std::move(fd))), display_path(std::move(display)),
+    State(Descriptor fd, FileOrigin origin, fs::path display, fs::path absolute = {}, fs::path physical = {})
+        : file(std::make_shared<File>(std::move(fd), origin)), display_path(std::move(display)),
           absolute_path(std::move(absolute)), physical_path(std::move(physical)) {
         root = piece({}, 0, file->original.length);
     }
@@ -405,13 +417,13 @@ void Document::open(const fs::path& path) {
     const auto physical = fs::canonical(absolute);
     Descriptor fd(::open(physical.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK));
     if (fd.get() < 0) fail("Open file");
-    state_ = std::make_unique<State>(std::move(fd), path, absolute, physical);
+    state_ = std::make_unique<State>(std::move(fd), FileOrigin::path, path, absolute, physical);
 }
 
 void Document::open_descriptor(int descriptor, const fs::path& display_name) {
     Descriptor copy(::fcntl(descriptor, F_DUPFD_CLOEXEC, 0));
     if (copy.get() < 0) fail("Open file descriptor");
-    state_ = std::make_unique<State>(std::move(copy), display_name);
+    state_ = std::make_unique<State>(std::move(copy), FileOrigin::provider, display_name);
 }
 
 Offset Document::size() const { return length(state_->root); }
@@ -491,7 +503,7 @@ void Document::save(const fs::path& path) {
     // Prepare the new model before publishing. The descriptor remains usable even
     // for a destination whose preserved permissions would prevent a second open.
     auto next = std::make_unique<State>();
-    next->file = std::make_shared<File>(temp.take());
+    next->file = std::make_shared<File>(temp.take(), FileOrigin::path);
     next->root = piece({}, 0, dest);
     next->display_path = path;
     next->absolute_path = absolute;
