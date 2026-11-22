@@ -99,6 +99,7 @@ final class DirectoryBranch: ObservableObject {
     let url: URL
     let access: ScopedURL
     private let cursor: DirectoryCursor
+    private var changedNames: Set<String> = []
     @Published private(set) var rows: [FileRow] = []
     @Published private(set) var children: [URL: DirectoryBranch] = [:]
     @Published private(set) var busy = false
@@ -118,6 +119,22 @@ final class DirectoryBranch: ObservableObject {
         }
     }
 
+    func apply(_ file: URL, exists: Bool) {
+        if url.standardizedFileURL.path == file.deletingLastPathComponent().standardizedFileURL.path {
+            let name = file.lastPathComponent
+            if busy || more { changedNames.insert(name) }
+            rows.removeAll { $0.url.lastPathComponent == name }
+            if exists {
+                let index = rows.firstIndex { !$0.isDirectory } ?? rows.endIndex
+                rows.insert(FileRow(url: file, isDirectory: false), at: index)
+            }
+        } else {
+            for child in children.values where file.pathComponents.starts(with: child.url.pathComponents) {
+                child.apply(file, exists: exists)
+            }
+        }
+    }
+
     func loadMore() {
         guard !busy, !cursor.finished else { return }
         busy = true
@@ -128,14 +145,25 @@ final class DirectoryBranch: ObservableObject {
             DispatchQueue.main.async {
                 self.busy = false
                 do {
-                    self.rows += try result.get()
+                    self.rows += try result.get().filter { !self.changedNames.contains($0.url.lastPathComponent) }
                     self.more = more
+                    if !more { self.changedNames.removeAll() }
                 } catch {
                     self.more = false
                     self.error = error.localizedDescription
                 }
             }
         }
+    }
+}
+
+struct FileDestination: Identifiable {
+    let location: FolderLocation
+    let url: URL
+    var id: URL { url }
+    var label: String {
+        let suffix = url.pathComponents.dropFirst(location.reference.url.pathComponents.count).joined(separator: "/")
+        return suffix.isEmpty ? location.title : location.title + "/" + suffix
     }
 }
 
@@ -244,6 +272,41 @@ final class WorkspaceModel: ObservableObject {
             throw EditorFailure("Choose the folder again to open this result.")
         }
         return try expanded[location.id]?.access ?? location.acquire()
+    }
+
+    func destinations(including extra: FileDestination? = nil) -> [FileDestination] {
+        var result: [FileDestination] = []
+        for location in locations {
+            let branch = expanded[location.id]
+            result.append(FileDestination(location: location, url: branch?.url ?? location.reference.url))
+            var stack = Array(branch?.children.values.map { $0 } ?? [])
+            while let node = stack.popLast() {
+                result.append(FileDestination(location: location, url: node.url))
+                stack.append(contentsOf: node.children.values)
+            }
+        }
+        if let extra, !result.contains(where: { $0.url == extra.url }) { result.append(extra) }
+        var seen: Set<String> = []
+        return result.filter { seen.insert($0.url.standardizedFileURL.path).inserted }
+                     .sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending }
+    }
+
+    func applyChange(to file: URL, exists: Bool, destination: FileDestination? = nil) {
+        if let destination {
+            let location = destination.location
+            if expanded[location.id] == nil { expand(location) }
+            var node = expanded[location.id]
+            if let root = node, destination.url.pathComponents.starts(with: root.url.pathComponents) {
+                for component in destination.url.pathComponents.dropFirst(root.url.pathComponents.count) {
+                    guard let parent = node else { break }
+                    let child = parent.url.appendingPathComponent(component, isDirectory: true)
+                    if parent.children[child] == nil { parent.toggle(child) }
+                    node = parent.children[child]
+                }
+            }
+        }
+        for branch in expanded.values { branch.apply(file, exists: exists) }
+        search()
     }
 
     func refresh() {

@@ -219,6 +219,123 @@ final class SlateTests: XCTestCase {
         XCTAssertEqual(reopened.locations.map(\.title), ["Slate Documents", "Second"])
     }
 
+    func testExclusiveCreationAndDeletionOnlyOfUnchangedRegularFiles() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let folder = base.appendingPathComponent("Workspace")
+        let outside = base.appendingPathComponent("Other")
+        defer { try? FileManager.default.removeItem(at: base) }
+        for url in [folder, outside] { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+        let grant = ScopedURL(folder)
+        for name in ["", " ", ".", "..", "../escape", "/outside", "dir/name", "dir\\name", "null\u{0}suffix"] {
+            XCTAssertThrowsError(try createEmptyFile(named: name, in: folder, grant: grant))
+        }
+        let link = folder.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        XCTAssertThrowsError(try createEmptyFile(named: "escape", in: link, grant: grant))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("escape").path))
+        XCTAssertThrowsError(try FileDeletion(grant))
+        let file = try createEmptyFile(named: "unique.txt", in: folder, grant: grant)
+        try Data("existing".utf8).write(to: file.url)
+        XCTAssertThrowsError(try createEmptyFile(named: "unique.txt", in: folder, grant: grant))
+        XCTAssertEqual(try Data(contentsOf: file.url), Data("existing".utf8))
+        let pending = try FileDeletion(file)
+        try FileManager.default.removeItem(at: file.url)
+        try FileManager.default.createDirectory(at: file.url, withIntermediateDirectories: false)
+        let child = file.url.appendingPathComponent("keep")
+        try Data("kept".utf8).write(to: child)
+        XCTAssertThrowsError(try pending.remove())
+        XCTAssertEqual(try Data(contentsOf: child), Data("kept".utf8))
+    }
+
+    @MainActor
+    func testDeletingCurrentFileUpdatesTreeSearchAndPersistedNavigation() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let folder = base.appendingPathComponent("workspace")
+        defer { try? FileManager.default.removeItem(at: base) }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let database = base.appendingPathComponent("history.sqlite")
+        let history = NavigationHistory(store: try XCTUnwrap(HistoryStore(url: database)))
+        let model = EditorModel(history: history)
+        let workspace = WorkspaceModel(documents: folder)
+        let choice = try XCTUnwrap(workspace.destinations().first)
+        let root = try XCTUnwrap(workspace.expanded[choice.location.id])
+        let first = try createEmptyFile(named: "keep", in: folder, grant: root.access)
+        model.open(first.url)
+        try await waitUntil { !model.busy }
+        model.createFile(named: "test.txt", destination: choice, workspace: workspace) { _ in }
+        try await waitUntil { !model.busy && model.title == "test.txt" }
+        let file = try XCTUnwrap(model.file)
+        model.edit("unsaved", caret: NSRange(location: 3, length: 0), composing: false)
+        workspace.query = "test.txt"
+        try await waitUntil { !workspace.searching }
+        XCTAssertEqual(workspace.hits.count, 1)
+        model.requestDeletion(file)
+        try await waitUntil { model.deletion != nil }
+        model.deletion = nil
+        XCTAssertTrue(model.dirty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.url.path))
+        model.requestDeletion(file)
+        try await waitUntil { model.deletion != nil }
+        model.confirmDeletion(try XCTUnwrap(model.deletion), workspace: workspace)
+        try await waitUntil { !model.busy && !workspace.searching }
+        XCTAssertNil(model.errorMessage)
+        XCTAssertNil(model.file)
+        XCTAssertFalse(model.dirty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.url.path))
+        XCTAssertTrue(workspace.hits.isEmpty)
+        XCTAssertFalse(root.rows.contains { $0.url.lastPathComponent == "test.txt" })
+        let restored = NavigationHistory(store: try XCTUnwrap(HistoryStore(url: database)))
+        XCTAssertNil(restored.currentVisit)
+        XCTAssertEqual(restored.tabCount, 1)
+        XCTAssertEqual(restored.tab(atVisit: try XCTUnwrap(restored.back))?.name, "keep")
+        XCTAssertEqual(restored.visibleTabs.map(\.name), ["keep"])
+    }
+
+    func testPagingSparseHistoryIDsAfterDeletion() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: base) }
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        let history = NavigationHistory()
+        for i in 0..<100 {
+            let file = ScopedURL(base.appendingPathComponent(String(i)))
+            try Data().write(to: file.url)
+            try history.record(file)
+            if i % 3 == 1 { try history.remove(FileDeletion(file)) }
+        }
+        // Add a dense range then remove holes so stable IDs span multiple strips.
+        for i in 100..<180 {
+            let file = ScopedURL(base.appendingPathComponent(String(i)))
+            try Data().write(to: file.url)
+            try history.record(file)
+        }
+        for i in stride(from: 103, to: 172, by: 3) { try history.remove(FileDeletion(ScopedURL(base.appendingPathComponent(String(i))))) }
+        let expected = Set((0..<180).filter { ($0 >= 100 || $0 % 3 != 1) && !($0 >= 103 && $0 < 172 && ($0 - 103) % 3 == 0) }.map(String.init))
+        var seen: [String] = []
+        var cursor = Int.max
+        while true {
+            let page = history.tabPage(starting: cursor, backward: true)
+            guard let last = page.last else { break }
+            seen += page.map(\.name)
+            cursor = last.id - 1
+        }
+        XCTAssertEqual(seen.count, expected.count)
+        XCTAssertEqual(Set(seen), expected)
+        while history.hasEarlierTabs { history.shiftStrip(forward: false) }
+        var visible = history.visibleTabs.map(\.name)
+        while history.hasLaterTabs {
+            history.shiftStrip(forward: true)
+            visible += history.visibleTabs.map(\.name)
+        }
+        XCTAssertEqual(visible.count, expected.count)
+        XCTAssertEqual(Set(visible), expected)
+
+        let oldest = try XCTUnwrap(history.tabPage(starting: 0, limit: 1).first)
+        try history.remove(FileDeletion(ScopedURL(URL(fileURLWithPath: oldest.path))))
+        let nearest = history.tabPage(starting: oldest.id + 1)
+        XCTAssertFalse(nearest.isEmpty)
+        XCTAssertEqual(history.openedFiles(endingAt: oldest.id).map(\.id), nearest.reversed().map(\.id))
+    }
+
     @MainActor
     func testBackSkipsUnavailableFileAndKeepsItsTab() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

@@ -64,6 +64,16 @@ struct EditorWindow: View {
             Button("Keep Editing", role: .cancel) { model.cancelDiscard() }
             Button("Discard Changes", role: .destructive) { model.discard() }
         }
+        .alert("Delete “\(model.deletion?.access.url.lastPathComponent ?? "")”?",
+               isPresented: Binding(get: { model.deletion != nil }, set: { if !$0 { model.deletion = nil } }),
+               presenting: model.deletion) { file in
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) { model.confirmDeletion(file, workspace: workspace) }
+        } message: { file in
+            if model.dirty && model.file?.url.standardizedFileURL.path == file.access.url.standardizedFileURL.path {
+                Text("The file will be removed from its folder and its unsaved changes will be discarded.")
+            } else { Text("The file will be removed from its folder.") }
+        }
         .alert("Slate", isPresented: Binding(get: { model.errorMessage != nil },
                                             set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK") { model.errorMessage = nil }
@@ -105,16 +115,22 @@ struct EditorWindow: View {
             Spacer(minLength: 0)
             if model.busy { ProgressView().controlSize(.small) }
             icon("square.and.arrow.down", "Save") { model.save() }.disabled(model.busy)
-            Menu {
+            Menu("File and appearance options", systemImage: "ellipsis.circle") {
                 Button("New Document", systemImage: "doc.badge.plus") { model.newDocument() }
                 Button("Open File…", systemImage: "doc") { pickFile() }
                 Button("Open Folder…", systemImage: "folder") { pickFolder() }
                 Button("Save As…", systemImage: "square.and.arrow.up") { model.needsSaveAs = true }
+                if let file = model.file {
+                    Button("Delete File…", systemImage: "trash", role: .destructive) { model.requestDeletion(file, tabID: model.history.active) }
+                        .accessibilityIdentifier("current-delete-file").disabled(model.busy)
+                }
                 Divider()
                 Button("Appearance…", systemImage: "slider.horizontal.3") { settings() }
-            } label: { Image(systemName: "ellipsis.circle").frame(minWidth: 30, minHeight: 36) }
-            .fixedSize()
-            .accessibilityLabel("File and appearance options")
+            }
+            .labelStyle(.iconOnly)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+            .accessibilityIdentifier("file-options")
         }
         .padding(.horizontal, 10)
         .frame(height: 46)
@@ -143,7 +159,7 @@ struct EditorWindow: View {
                 else { pendingSelection = URL(fileURLWithPath: tab.path) }
             }
             model.showTab(tab)
-        })
+        }, created: { url in if compact { pendingSelection = url } })
     }
 
     private var pageFooter: some View {
@@ -188,6 +204,7 @@ struct TabStrip: View {
                         ForEach(history.visibleTabs) { item in
                             Button { model.showTab(item) } label: { tab(item.name, selected: history.active == item.id) }
                                 .id(item.id).buttonStyle(.plain).help(item.path)
+                                .accessibilityIdentifier("document-tab-" + item.name)
                                 .accessibilityAddTraits(history.active == item.id ? .isSelected : [])
                         }
                     }

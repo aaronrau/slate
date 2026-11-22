@@ -77,7 +77,17 @@ final class NavigationHistory: ObservableObject {
         guard let id = store.tabID(at: visit) else { return nil }
         return tab(id: id)
     }
-    func tabPage(starting index: Int) -> [Tab] { store.tabs(from: index, limit: Self.stripSize) }
+    func tabPage(starting id: Int, backward: Bool = false, limit: Int = NavigationHistory.stripSize) -> [Tab] {
+        store.tabs(from: id, limit: limit, backward: backward)
+    }
+
+    func openedFiles(endingAt id: Int) -> [Tab] {
+        let page = tabPage(starting: id, backward: true)
+        // Deleting the last row of the oldest page leaves the view's anchor
+        // below every surviving ID. Show the nearest remaining page.
+        if page.isEmpty && tabCount > 0 { return tabPage(starting: id).reversed() }
+        return page
+    }
 
     func tab(id: Int) -> Tab? {
         guard let tab = store.tabs(from: id, limit: 1).first, tab.id == id else { return nil }
@@ -88,15 +98,36 @@ final class NavigationHistory: ObservableObject {
         return try reference.acquire()
     }
 
-    var hasEarlierTabs: Bool { stripStart > 0 }
-    var hasLaterTabs: Bool { stripStart + Self.stripSize < tabCount }
+    private(set) var hasEarlierTabs = false
+    private(set) var hasLaterTabs = false
     func shiftStrip(forward: Bool) {
         objectWillChange.send()
-        loadStrip(containing: min(tabCount - 1, max(0, stripStart + (forward ? Self.stripSize : -Self.stripSize))))
+        if forward, let last = visibleTabs.last { showStrip(store.tabs(from: last.id + 1, limit: Self.stripSize)) }
+        else if !forward, let first = visibleTabs.first {
+            showStrip(store.tabs(from: first.id - 1, limit: Self.stripSize, backward: true).reversed())
+        }
     }
     private func loadStrip(containing id: Int) {
-        stripStart = max(0, id / Self.stripSize * Self.stripSize)
-        visibleTabs = store.tabs(from: stripStart, limit: Self.stripSize)
+        let start = max(0, id / Self.stripSize * Self.stripSize)
+        let tabs = store.tabs(from: start, limit: Self.stripSize)
+        if tabs.isEmpty { showStrip(store.tabs(from: start, limit: Self.stripSize, backward: true).reversed()) }
+        else { showStrip(tabs) }
+    }
+    private func showStrip(_ tabs: [Tab]) {
+        visibleTabs = tabs
+        stripStart = tabs.first?.id ?? 0
+        hasEarlierTabs = !store.tabs(from: stripStart - 1, limit: 1, backward: true).isEmpty
+        hasLaterTabs = !store.tabs(from: (tabs.last?.id ?? -1) + 1, limit: 1).isEmpty
+    }
+
+    func remove(_ file: FileDeletion) throws {
+        let ids = try store.remove(path: file.access.url.standardizedFileURL.path, tabID: file.tabID, active: active, position: position)
+        guard !ids.isEmpty else { return }
+        objectWillChange.send()
+        tabCount -= ids.count
+        if let active, ids.contains(active) { self.active = nil }
+        loadStrip(containing: active ?? stripStart)
+        updateArrows()
     }
     private func updateArrows() {
         back = store.visit(starting: position - (active == nil ? 0 : 1), backward: true)
@@ -122,14 +153,15 @@ final class NavigationHistory: ObservableObject {
     }
 
     func record(_ file: ScopedURL, at visit: Int? = nil) throws {
-        let id = visit.flatMap { store.tabID(at: $0) } ?? store.tabID(path: file.url.standardizedFileURL.path) ?? tabCount
+        let existing = visit.flatMap { store.tabID(at: $0) } ?? store.tabID(path: file.url.standardizedFileURL.path)
+        let id = existing ?? store.nextTabID
         let append = visit == nil && active != id
         let next = visit ?? (append ? position + 1 : position)
         try store.record(file: file, id: id, position: next, appended: append)
         objectWillChange.send()
         active = id
         position = next
-        tabCount = max(tabCount, id + 1)
+        if existing == nil { tabCount += 1 }
         loadStrip(containing: id)
         updateArrows()
     }

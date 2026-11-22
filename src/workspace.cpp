@@ -2,10 +2,16 @@
 #include "search.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
+#include <fcntl.h>
 #include <memory>
 #include <string>
+#include <sys/stat.h>
+#include <system_error>
 #include <unordered_map>
+#include <unordered_set>
+#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -145,7 +151,42 @@ struct Folder {
     GtkTreeIter row;
     std::shared_ptr<Cursor> cursor;
     bool loading = false;
+    bool complete = false;
+    // An in-flight iterator can report a file that the sidebar has already added or removed.
+    std::unordered_set<fs::path> changed;
 };
+
+class Directory {
+public:
+    Directory(const fs::path& root, const fs::path& relative) {
+        if (relative.empty() || relative.is_absolute() ||
+            std::find(relative.begin(), relative.end(), "..") != relative.end())
+            throw std::runtime_error("Select a folder in this workspace.");
+        constexpr int flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW;
+        fd = ::open(root.c_str(), flags);
+        if (fd < 0) throw std::system_error(errno, std::generic_category(), "Open workspace");
+        for (const auto& component : relative) {
+            if (component == ".") continue;
+            const int next = ::openat(fd, component.c_str(), flags);
+            const int error = errno;
+            ::close(fd);
+            if (next < 0) throw std::system_error(error, std::generic_category(), "Open folder");
+            fd = next;
+        }
+    }
+    ~Directory() { ::close(fd); }
+    Directory(const Directory&) = delete;
+    Directory& operator=(const Directory&) = delete;
+    int fd;
+};
+
+struct stat regular_file(int folder, const fs::path& name) {
+    struct stat info{};
+    if (::fstatat(folder, name.c_str(), &info, AT_SYMLINK_NOFOLLOW) < 0)
+        throw std::system_error(errno, std::generic_category(), "Inspect file");
+    if (!S_ISREG(info.st_mode)) throw std::runtime_error("Select a regular file to delete.");
+    return info;
+}
 
 } // namespace
 
@@ -153,9 +194,10 @@ struct Workspace::Impl : std::enable_shared_from_this<Impl> {
     explicit Impl(Workspace& owner) : owner(owner) {}
 
     Workspace& owner;
-    GtkWidget *box{}, *entry{}, *files_btn{}, *content_btn{}, *tree{}, *status{};
+    GtkWidget *box{}, *entry{}, *files_btn{}, *content_btn{}, *tree{}, *status{}, *delete_btn{};
     GtkTreeStore *browser{}, *results{};
     fs::path root;
+    fs::path physical_root;
     std::unordered_map<fs::path, Folder> folders;
     SearchCancellation search_stop;
     guint timer = 0;
@@ -213,13 +255,33 @@ struct Workspace::Impl : std::enable_shared_from_this<Impl> {
         auto* title = gtk_label_new("EXPLORER");
         add_class(title, "workspace-heading");
         gtk_box_pack_start(GTK_BOX(top), title, FALSE, FALSE, 0);
-        auto* refresh = gtk_button_new_from_icon_name("view-refresh-symbolic", GTK_ICON_SIZE_MENU);
-        gtk_widget_set_tooltip_text(refresh, "Refresh workspace");
-        add_class(refresh, "workspace-refresh");
-        gtk_box_pack_end(GTK_BOX(top), refresh, FALSE, FALSE, 0);
+        auto action_button = [top](const char* icon, const char* name) {
+            auto* button = gtk_button_new_from_icon_name(icon, GTK_ICON_SIZE_MENU);
+            gtk_widget_set_tooltip_text(button, name);
+            atk_object_set_name(gtk_widget_get_accessible(button), name);
+            add_class(button, "workspace-refresh");
+            gtk_box_pack_end(GTK_BOX(top), button, FALSE, FALSE, 0);
+            return button;
+        };
+        auto* refresh = action_button("view-refresh-symbolic", "Refresh workspace");
         g_signal_connect(refresh, "clicked", G_CALLBACK(+[](GtkButton*, gpointer p) {
             auto& self = *static_cast<Impl*>(p);
             self.set_root(self.root);
+        }), this);
+        delete_btn = action_button("edit-delete-symbolic", "Delete File");
+        gtk_widget_set_sensitive(delete_btn, FALSE);
+        g_signal_connect(delete_btn, "clicked", G_CALLBACK(+[](GtkButton*, gpointer p) {
+            auto& self = *static_cast<Impl*>(p);
+            const auto target = self.selected();
+            if (target.first == file_row && self.owner.on_delete_file)
+                self.owner.on_delete_file(target.second);
+        }), this);
+        auto* create = action_button("document-new-symbolic", "New File");
+        g_signal_connect(create, "clicked", G_CALLBACK(+[](GtkButton*, gpointer p) {
+            auto& self = *static_cast<Impl*>(p);
+            const auto target = self.selected();
+            auto folder = target.first == file_row ? target.second.parent_path() : target.second;
+            if (self.owner.on_new_file) self.owner.on_new_file(folder.empty() ? self.root : folder);
         }), this);
 
         entry = gtk_search_entry_new();
@@ -269,6 +331,11 @@ struct Workspace::Impl : std::enable_shared_from_this<Impl> {
         tree = gtk_tree_view_new_with_model(GTK_TREE_MODEL(browser));
         add_class(tree, "workspace-tree");
         auto* view = GTK_TREE_VIEW(tree);
+        g_signal_connect(gtk_tree_view_get_selection(view), "changed",
+            G_CALLBACK(+[](GtkTreeSelection*, gpointer p) {
+                auto& self = *static_cast<Impl*>(p);
+                if (!self.closed) gtk_widget_set_sensitive(self.delete_btn, self.selected().first == file_row);
+            }), this);
         gtk_tree_view_set_headers_visible(view, FALSE);
         gtk_tree_view_set_enable_search(view, FALSE);
         gtk_tree_view_set_activate_on_single_click(view, TRUE);
@@ -335,13 +402,27 @@ struct Workspace::Impl : std::enable_shared_from_this<Impl> {
         return gtk_tree_view_get_model(GTK_TREE_VIEW(tree)) == GTK_TREE_MODEL(results);
     }
 
+    std::pair<int, fs::path> selected() const {
+        GtkTreeModel* model;
+        GtkTreeIter iter;
+        if (gtk_tree_selection_get_selected(gtk_tree_view_get_selection(GTK_TREE_VIEW(tree)),
+                                            &model, &iter))
+            return {row_kind(model, &iter), iter_path(model, &iter)};
+        return {note_row, {}};
+    }
+
+    GtkTreeIter append_file(GtkTreeIter* row, const fs::path& path) {
+        return append(browser, row, file_row, "text-x-generic-symbolic",
+                      escape(display_path(path.filename())), path, display_path(path));
+    }
+
     GtkTreeIter append_folder(GtkTreeIter* parent, const fs::path& path, bool is_root) {
         auto label = display_path(path.filename().empty() ? path : path.filename());
         auto markup = escape(label);
         if (is_root) markup = "<b>" + markup + "</b>";
         auto row = append(browser, parent, folder_row, "folder-symbolic", markup, path,
                           display_path(path));
-        append(browser, &row, note_row, nullptr, "Loading…", {}, {});
+        append(browser, &row, note_row, nullptr, "Loading…", path, {});
         return row;
     }
 
@@ -355,6 +436,8 @@ struct Workspace::Impl : std::enable_shared_from_this<Impl> {
         root = fs::absolute(path, ec).lexically_normal();
         if (ec) root = std::move(path);
         if (!root.has_filename() && root != root.root_path()) root = root.parent_path();
+        physical_root = fs::canonical(root, ec);
+        if (ec) physical_root = root;
         append_folder(nullptr, root, true);
         auto* row = gtk_tree_path_new_first();
         gtk_tree_view_expand_row(GTK_TREE_VIEW(tree), row, FALSE);
@@ -384,7 +467,7 @@ struct Workspace::Impl : std::enable_shared_from_this<Impl> {
             } else ++it;
         }
         // Leave a child so GTK continues to show the disclosure triangle.
-        auto placeholder = append(browser, row, note_row, nullptr, "Loading…", {}, {});
+        auto placeholder = append(browser, row, note_row, nullptr, "Loading…", path, {});
         GtkTreeIter child;
         gboolean valid = gtk_tree_model_iter_children(model, &child, row);
         while (valid) {
@@ -415,17 +498,22 @@ struct Workspace::Impl : std::enable_shared_from_this<Impl> {
         found->second.loading = false;
         auto row = found->second.row;
         for (const auto& item : page.entries) {
+            if (found->second.changed.contains(item.path)) continue;
             if (item.directory) append_folder(&row, item.path, false);
-            else append(browser, &row, file_row, "text-x-generic-symbolic",
-                        escape(display_path(item.path.filename())), item.path, display_path(item.path));
+            else append_file(&row, item.path);
         }
+        found->second.complete = !page.more;
+        if (found->second.complete) found->second.changed.clear();
         // Install the replacement before removing the placeholder to preserve
         // expansion when a directory is empty or inaccessible.
         std::string message;
         if (!page.error.empty()) message = "Cannot read folder";
         else if (page.more) message = "Load more…";
-        else if (gtk_tree_model_iter_n_children(GTK_TREE_MODEL(browser), &row) == 1 &&
-                 page.entries.empty()) message = "Empty folder";
+        else if (gtk_tree_model_iter_n_children(GTK_TREE_MODEL(browser), &row) == 1) {
+            GtkTreeIter only;
+            gtk_tree_model_iter_children(GTK_TREE_MODEL(browser), &only, &row);
+            if (row_kind(GTK_TREE_MODEL(browser), &only) >= more_row) message = "Empty folder";
+        }
         if (message.empty()) { remove_actions(browser, &row); return; }
         auto* model = GTK_TREE_MODEL(browser);
         GtkTreeIter child;
@@ -440,6 +528,45 @@ struct Workspace::Impl : std::enable_shared_from_this<Impl> {
         }
     }
 
+    void file_changed(const fs::path& path, bool created) {
+        auto parent = path.parent_path();
+        auto* view = GTK_TREE_VIEW(tree);
+        auto* model = GTK_TREE_MODEL(browser);
+        if (created && !showing_results() && !folders.contains(parent)) {
+            GtkTreeIter row;
+            if (gtk_tree_selection_get_selected(gtk_tree_view_get_selection(view), nullptr, &row) &&
+                iter_path(model, &row) == parent) {
+                auto* position = gtk_tree_model_get_path(model, &row);
+                gtk_tree_view_expand_row(view, position, FALSE);
+                gtk_tree_path_free(position);
+            }
+        }
+        auto found = folders.find(parent);
+        if (found != folders.end()) {
+            auto& folder = found->second;
+            if (!folder.complete) folder.changed.insert(path);
+            GtkTreeIter row;
+            bool exists = gtk_tree_model_iter_children(model, &row, &folder.row);
+            while (exists && (row_kind(model, &row) != file_row || iter_path(model, &row) != path))
+                exists = gtk_tree_model_iter_next(model, &row);
+            if (created) {
+                if (!exists) row = append_file(&folder.row, path);
+                if (folder.complete) remove_actions(browser, &folder.row);
+                if (!showing_results()) {
+                    gtk_tree_selection_select_iter(gtk_tree_view_get_selection(view), &row);
+                    auto* position = gtk_tree_model_get_path(model, &row);
+                    gtk_tree_view_scroll_to_cell(view, position, nullptr, FALSE, 0, 0);
+                    gtk_tree_path_free(position);
+                }
+            } else if (exists) {
+                if (gtk_tree_model_iter_n_children(model, &folder.row) == 1)
+                    append(browser, &folder.row, note_row, nullptr, "Empty folder", parent, {});
+                gtk_tree_store_remove(browser, &row);
+            }
+        }
+        if (showing_results()) query_changed();
+    }
+
     void activate(GtkTreePath* path) {
         auto* view = GTK_TREE_VIEW(tree);
         auto* model = gtk_tree_view_get_model(view);
@@ -452,6 +579,7 @@ struct Workspace::Impl : std::enable_shared_from_this<Impl> {
         } else if (kind == more_row) {
             load_page(iter_path(model, &iter));
         } else if (kind == file_row && owner.on_open) {
+            gtk_tree_selection_select_iter(gtk_tree_view_get_selection(view), &iter);
             guint64 offset = 0, length = 0;
             gtk_tree_model_get(model, &iter, offset_col, &offset, length_col, &length, -1);
             owner.on_open(iter_path(model, &iter), offset, static_cast<std::size_t>(length));
@@ -564,6 +692,45 @@ Workspace::~Workspace() = default;
 GtkWidget* Workspace::widget() const { return impl_->box; }
 
 void Workspace::set_root(const fs::path& path) { impl_->set_root(path); }
+
+fs::path Workspace::create_file(const fs::path& folder, const std::string& name) {
+    const fs::path leaf(name);
+    if (name.find_first_not_of(" \t\r\n") == std::string::npos || leaf.has_parent_path() ||
+        name == "." || name == ".." || name.find('\\') != std::string::npos ||
+        std::any_of(name.begin(), name.end(), [](unsigned char c) { return c < 32 || c == 127; }))
+        throw std::runtime_error("Enter a file name without a folder path.");
+    Directory parent(impl_->physical_root, folder.lexically_relative(impl_->root));
+    const auto file = ::openat(parent.fd, name.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    if (file < 0 && errno == EEXIST)
+        throw std::runtime_error("A file or folder named “" + display_path(leaf) + "” already exists.");
+    if (file < 0) throw std::system_error(errno, std::generic_category(), "Create file");
+    if (::close(file) < 0) throw std::system_error(errno, std::generic_category(), "Close file");
+    const auto path = folder / leaf;
+    impl_->file_changed(path, true);
+    return path;
+}
+
+bool Workspace::delete_file(const fs::path& path, const std::function<bool()>& confirm) {
+    const auto relative = path.parent_path().lexically_relative(impl_->root);
+    Directory parent(impl_->physical_root, relative);
+    const auto name = path.filename();
+    const auto before = regular_file(parent.fd, name);
+    if (!confirm()) return false;
+    Directory current(impl_->physical_root, relative);
+    const auto after = regular_file(current.fd, name);
+#ifdef __APPLE__
+    auto old_change = before.st_ctimespec, new_change = after.st_ctimespec;
+#else
+    auto old_change = before.st_ctim, new_change = after.st_ctim;
+#endif
+    if (before.st_dev != after.st_dev || before.st_ino != after.st_ino ||
+        old_change.tv_sec != new_change.tv_sec || old_change.tv_nsec != new_change.tv_nsec)
+        throw std::runtime_error("The file changed. Select it again before deleting.");
+    if (::unlinkat(current.fd, name.c_str(), 0) < 0)
+        throw std::system_error(errno, std::generic_category(), "Delete file");
+    impl_->file_changed(path, false);
+    return true;
+}
 
 void Workspace::focus_search(bool content) {
     if (impl_->closed) return;

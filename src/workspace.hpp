@@ -20,8 +20,11 @@ public:
     GtkWidget* widget() const;
     void set_root(const std::filesystem::path& root);
     void focus_search(bool content);
+    std::filesystem::path create_file(const std::filesystem::path& folder, const std::string& name);
+    bool delete_file(const std::filesystem::path& file, const std::function<bool()>& confirm);
 
     std::function<void(const std::filesystem::path&, std::uint64_t, std::size_t)> on_open;
+    std::function<void(const std::filesystem::path&)> on_new_file, on_delete_file;
 
 private:
     struct Impl;

@@ -10,6 +10,7 @@ final class EditorModel: ObservableObject {
     @Published private(set) var busy = false
     @Published var errorMessage: String?
     @Published var confirmDiscard = false
+    @Published var deletion: FileDeletion?
     @Published var needsSaveAs = false
     @Published var exportFile: ExportFile?
     @Published private(set) var pageRevision = 0
@@ -72,6 +73,64 @@ final class EditorModel: ObservableObject {
             rememberPosition()
             install(Document(), file: nil, revision: nil, page: TextPage())
             history.leaveFile()
+        }
+    }
+
+    func createFile(named name: String, destination: FileDestination, workspace: WorkspaceModel,
+                    created: @escaping (URL) -> Void) {
+        protectChanges { [self] in
+            busy = true
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = Result {
+                    let grant = try destination.location.acquire()
+                    return try createEmptyFile(named: name, in: destination.url, grant: grant)
+                }
+                DispatchQueue.main.async {
+                    self.busy = false
+                    do {
+                        let file = try result.get()
+                        workspace.applyChange(to: file.url, exists: true, destination: destination)
+                        created(file.url)
+                        self.load(file, previewMode: false)
+                    } catch { self.errorMessage = error.localizedDescription }
+                }
+            }
+        }
+    }
+
+    func requestDeletion(_ access: ScopedURL, tabID: Int? = nil) {
+        guard !busy else { return }
+        busy = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result { try FileDeletion(access, tabID: tabID) }
+            DispatchQueue.main.async {
+                self.busy = false
+                do { self.deletion = try result.get() }
+                catch { self.errorMessage = error.localizedDescription }
+            }
+        }
+    }
+
+    func confirmDeletion(_ candidate: FileDeletion, workspace: WorkspaceModel) {
+        guard !busy else { return }
+        deletion = nil
+        busy = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result { try candidate.remove() }
+            DispatchQueue.main.async {
+                self.busy = false
+                do {
+                    try result.get()
+                    let url = candidate.access.url
+                    let current = self.file?.url.standardizedFileURL.path == url.standardizedFileURL.path
+                    if current {
+                        self.install(Document(), file: nil, revision: nil, page: TextPage())
+                        self.history.leaveFile()
+                    }
+                    workspace.applyChange(to: url, exists: false)
+                    try self.history.remove(candidate)
+                } catch { self.errorMessage = error.localizedDescription }
+            }
         }
     }
 
@@ -157,7 +216,7 @@ final class EditorModel: ObservableObject {
                     if let offset {
                         self.selection = page.selection(at: offset, length: length)
                         self.preview = (previewMode ?? false) && self.markdown && page.isUTF8
-                    }
+                    } else if let previewMode { self.preview = previewMode && self.markdown && page.isUTF8 }
                     self.rememberPosition()
                 } catch {
                     if let onFailure { onFailure(error) } else { self.errorMessage = error.localizedDescription }

@@ -54,6 +54,17 @@ void exercise(const fs::path& database) {
         h.visit(closed->path, closed->visit);
         auto tabs = h.nearby_tabs();
         require(tabs.back().path == "/renamed", "history failed to reopen a closed tab");
+        h.visit(target(1));
+        h.visit("/renamed");
+        h.forget("/renamed");
+        require(h.current()->path == target(1), "deleting active file lost the previous visit");
+        require(!h.position("/renamed") && !h.next(), "deleted file retained its history");
+        h.forget(target(1));
+        require(h.current()->path == target(0) && !h.next(), "duplicate deleted visits survived");
+        h.forget(target(0));
+        require(!h.current(), "last deleted visit survived");
+        h.visit("/renamed");
+        require(!h.previous() && h.current()->cursor == 0, "recreated file inherited deleted history");
     }
 }
 

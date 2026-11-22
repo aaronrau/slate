@@ -126,7 +126,7 @@ public final class FilesPaneTest extends ActivityInstrumentationTestCase2<MainAc
                 AccessibilityNodeInfo node = nodes.removeFirst();
                 String id = node.getViewIdResourceName();
                 CharSequence title = node.getText();
-                if (node.isEnabled() && ((id != null && id.endsWith(idSuffix))
+                if (node.isEnabled() && ((idSuffix != null && id != null && id.endsWith(idSuffix))
                     || (title != null && text.equalsIgnoreCase(title.toString())))) {
                     while (node != null) {
                         if (node.isClickable()) return node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
@@ -141,6 +141,92 @@ public final class FilesPaneTest extends ActivityInstrumentationTestCase2<MainAc
             }
             return false;
         });
+    }
+
+    private void enterName(String value) throws Exception {
+        UiAutomation automation = getInstrumentation().getUiAutomation();
+        await("file name entry", () -> {
+            AccessibilityNodeInfo root = automation.getRootInActiveWindow();
+            if (root == null) return false;
+            ArrayDeque<AccessibilityNodeInfo> nodes = new ArrayDeque<>();
+            nodes.add(root);
+            while (!nodes.isEmpty()) {
+                AccessibilityNodeInfo n = nodes.removeFirst();
+                if ("New file name".contentEquals(n.getContentDescription() == null ? "" : n.getContentDescription())) {
+                    android.os.Bundle args = new android.os.Bundle();
+                    args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
+                    return n.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                }
+                for (int i = 0; i < n.getChildCount(); i++) if (n.getChild(i) != null) nodes.add(n.getChild(i));
+            }
+            return false;
+        });
+    }
+
+    private EditText source(View v) {
+        if (v instanceof EditText e && e.isShown() && !"Search files".equals(e.getContentDescription())) return e;
+        if (v instanceof ViewGroup g) for (int i = 0; i < g.getChildCount(); i++) {
+            EditText e = source(g.getChildAt(i));
+            if (e != null) return e;
+        }
+        return null;
+    }
+
+    private void manageNestedFile(MainActivity activity, Uri grant, String docId) throws Throwable {
+        Workspace ws = new Workspace(activity.getContentResolver(), grant);
+        Uri nested = DocumentsContract.buildDocumentUriUsingTree(grant, docId + "/nested");
+        Uri note = DocumentsContract.buildDocumentUriUsingTree(grant, docId + "/nested/notes.md");
+        waitForView("Actions for nested");
+        main(() -> view("Actions for nested").performClick());
+        pickerButton(null, "New file here…");
+        enterName("notes.md");
+        pickerButton(null, "Create");
+        waitForView("notes.md, current file");
+        assertEquals("notes.md", Workspace.info(activity.getContentResolver(), note).name());
+        main(() -> {
+            source(activity.getWindow().getDecorView()).setText("saved text");
+            return view("Save file").performClick();
+        });
+        await("saved provider bytes", () -> {
+            try (InputStream content = activity.getContentResolver().openInputStream(note)) {
+                byte[] b = new byte[10];
+                return content != null && content.read(b) == b.length && new String(b, java.nio.charset.StandardCharsets.UTF_8).equals("saved text");
+            }
+        });
+        try { ws.create(nested, "notes.md"); fail("Existing file was accepted"); }
+        catch (IOException expected) { assertTrue(expected.getMessage().contains("already exists")); }
+        for (String other : new String[]{"Makefile", ".env", "custom.abcxyz"}) {
+            Workspace.Created created = ws.create(nested, other);
+            assertEquals(other, Workspace.info(activity.getContentResolver(), created.uri()).name());
+            Workspace.delete(activity, Workspace.prepareDelete(activity, created.uri(), other));
+        }
+        try { Workspace.prepareDelete(activity, nested, "nested"); fail("Directory deletion was accepted"); }
+        catch (IOException expected) { assertTrue(expected.getMessage().contains("Choose a file")); }
+        // Replace the actual inode behind the same DocumentsProvider URI
+        // while a previously inspected delete request is pending.
+        Uri replaced = ws.create(nested, "replaced.txt").uri();
+        Workspace.Deletion snapshot = Workspace.prepareDelete(activity, replaced, "replaced.txt");
+        String dir = "/sdcard/" + docId.substring("primary:".length()) + "/nested/";
+        shell("touch " + dir + "new-inode");
+        shell("mv -f " + dir + "new-inode " + dir + "replaced.txt");
+        try { Workspace.delete(activity, snapshot); fail("Replacement was deleted"); }
+        catch (IOException expected) { assertTrue(expected.getMessage().contains("changed")); }
+        assertEquals("replaced.txt", Workspace.info(activity.getContentResolver(), replaced).name());
+        Workspace.delete(activity, Workspace.prepareDelete(activity, replaced, "replaced.txt"));
+        main(() -> {
+            source(activity.getWindow().getDecorView()).append(" unsaved");
+            return view("Actions for notes.md").performClick();
+        });
+        pickerButton(null, "Delete file…");
+        pickerButton(null, "Cancel");
+        assertEquals("saved text unsaved", main(() -> source(activity.getWindow().getDecorView()).getText().toString()));
+        assertEquals("notes.md", Workspace.info(activity.getContentResolver(), note).name());
+        main(() -> view("Actions for notes.md").performClick());
+        pickerButton(null, "Delete file…");
+        pickerButton(null, "Delete and discard edits");
+        waitForView("entry.txt, current file");
+        assertNull(main(() -> view("Actions for notes.md")));
+        assertFalse(ws.list(nested, 0, null).entries().stream().anyMatch(e -> e.name().equals("notes.md")));
     }
 
     public void testGrantedFolderOpensAsAdaptiveInlineTree() throws Throwable {
@@ -246,6 +332,7 @@ public final class FilesPaneTest extends ActivityInstrumentationTestCase2<MainAc
             tapRow("nested, collapsed folder");
             tapRow("entry.txt, current file");
             assertNotNull(main(() -> view("Files pane")));
+            manageNestedFile(activity, grant, docId);
         } finally {
             instrumentation.removeMonitor(monitor);
             for (UriPermission permission : instrumentation.getTargetContext().getContentResolver().getPersistedUriPermissions()) {

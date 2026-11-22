@@ -1,5 +1,6 @@
 package org.slate.editor;
 
+import android.app.AlertDialog;
 import android.content.*;
 import android.database.Cursor;
 import android.graphics.Typeface;
@@ -25,7 +26,7 @@ final class WorkspaceTree implements AutoCloseable {
     private final LinearLayout pane;
     private final ListView list;
     private final TextView title, empty;
-    private final Button openFolder, openFile, refresh;
+    private final Button openFolder, openFile, newFile, refresh;
     private final SidebarSearch search;
     private int treeScroll, treeTop;
     private Uri selected;
@@ -81,6 +82,7 @@ final class WorkspaceTree implements AutoCloseable {
         LinearLayout actions = new LinearLayout(ui);
         openFolder = action(actions, "Open folder", ui::pickFolder);
         openFile = action(actions, "Open file", ui::pickFile);
+        newFile = action(actions, "New file", this::newFile);
         pane.addView(actions);
         search = new SidebarSearch(ui, this, theme);
         pane.addView(search.controls);
@@ -104,6 +106,9 @@ final class WorkspaceTree implements AutoCloseable {
     private Button action(LinearLayout bar, String text, Runnable callback) {
         Button button = new Button(ui, null, android.R.attr.borderlessButtonStyle);
         button.setText(text);
+        button.setMinWidth(0);
+        button.setMinimumWidth(0);
+        button.setPadding(0, 0, 0, 0);
         button.setContentDescription(text);
         button.setAllCaps(false);
         button.setOnClickListener(v -> callback.run());
@@ -246,8 +251,94 @@ final class WorkspaceTree implements AutoCloseable {
         title.setTextColor(theme.text());
         empty.setTextColor(theme.muted());
         search.paint();
-        for (Button b : new Button[]{openFolder, openFile, refresh}) b.setTextColor(theme.accent());
+        for (Button b : new Button[]{openFolder, openFile, newFile, refresh}) b.setTextColor(theme.accent());
         adapter.notifyDataSetChanged();
+    }
+
+    void newFile() {
+        ArrayList<Node> roots = new ArrayList<>();
+        for (Node n : grants.values()) if (n.folder) roots.add(n);
+        if (roots.isEmpty()) { ui.pickNewParent(); return; }
+        String[] names = new String[roots.size() + 1];
+        for (int i = 0; i < roots.size(); i++) {
+            Node n = roots.get(i);
+            names[i] = n.name;
+            for (Node other : roots) if (other != n && n.name.equals(other.name)) {
+                names[i] += " · " + DocumentsContract.getDocumentId(n.uri);
+                break;
+            }
+        }
+        names[roots.size()] = "Choose another folder…";
+        ui.dialog().setTitle("Create file in").setItems(names, (d, i) -> {
+            if (i == roots.size()) ui.pickNewParent(); else askName(roots.get(i));
+        }).setNegativeButton("Cancel", null).show();
+    }
+
+    void newAtRoot(Uri tree) {
+        Node n = grants.get(tree);
+        if (n != null) askName(n);
+    }
+
+    private String location(Node node) {
+        Deque<String> parts = new ArrayDeque<>();
+        for (Node n = node; n != null; n = n.parent) parts.addFirst(n.name);
+        return String.join("/", parts);
+    }
+
+    private void askName(Node parent) {
+        AlertDialog.Builder builder = ui.dialog();
+        EditText name = new EditText(builder.getContext());
+        name.setSingleLine();
+        name.setHint("File name");
+        name.setContentDescription("New file name");
+        LinearLayout field = new LinearLayout(builder.getContext());
+        field.setPadding(ui.dp(20), 0, ui.dp(20), 0);
+        field.addView(name, -1, -2);
+        AlertDialog prompt = builder.setTitle("New file").setMessage("Create in " + location(parent))
+            .setView(field).setPositiveButton("Create", null).setNegativeButton("Cancel", null).create();
+        prompt.setOnShowListener(d -> prompt.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String value = name.getText().toString();
+            String issue = Workspace.invalidName(value);
+            if (issue != null) { name.setError(issue); return; }
+            prompt.dismiss();
+            ui.createFile(parent.workspace, parent.uri, value);
+        }));
+        prompt.show();
+    }
+
+    private void actions(View anchor, Node target) {
+        PopupMenu menu = new PopupMenu(ui, anchor);
+        if (target.folder) menu.getMenu().add("New file here…")
+            .setOnMenuItemClickListener(item -> { askName(target); return true; });
+        else menu.getMenu().add("Delete file…")
+            .setOnMenuItemClickListener(item -> { ui.deleteFile(target.uri, target.name); return true; });
+        menu.show();
+    }
+
+    void created(Uri parent, int pageStart) {
+        for (Row r : rows) if (r.kind == Kind.ITEM && r.node.folder && sameDocument(r.node.uri, parent)) {
+            r.node.expanded = true;
+            if (pageStart >= 0) r.node.skip = pageStart;
+            savePosition(r.node);
+            release(r.node);
+        }
+        if (search.active()) search.input.setText("");
+        rebuild();
+    }
+
+    void deleted(Uri target) {
+        grantGeneration++;
+        grants.entrySet().removeIf(e -> !e.getValue().folder && sameDocument(e.getValue().uri, target));
+        for (Node n : grants.values()) if (n.folder) release(n);
+        for (UriPermission p : ui.getContentResolver().getPersistedUriPermissions()) {
+            if (wholeTree(p.getUri()) || !sameDocument(p.getUri(), target)) continue;
+            int flags = (p.isReadPermission() ? Intent.FLAG_GRANT_READ_URI_PERMISSION : 0)
+                | (p.isWritePermission() ? Intent.FLAG_GRANT_WRITE_URI_PERMISSION : 0);
+            try { ui.getContentResolver().releasePersistableUriPermission(p.getUri(), flags); }
+            catch (SecurityException ignored) { /* The provider may revoke the grant on deletion. */ }
+        }
+        rebuild();
+        if (search.active()) search.restart();
     }
 
     private void savePosition(Node n) {
@@ -418,6 +509,12 @@ final class WorkspaceTree implements AutoCloseable {
             view.label.setText(text);
             view.label.setTextColor(item ? theme.text() : theme.muted());
             view.label.setTypeface(Typeface.DEFAULT, active || row.kind == Kind.FILES ? Typeface.BOLD : Typeface.NORMAL);
+            view.actions.setVisibility(item ? View.VISIBLE : View.GONE);
+            if (item) {
+                view.actions.setTextColor(theme.muted());
+                view.actions.setContentDescription("Actions for " + n.name);
+                view.actions.setOnClickListener(v -> actions(v, n));
+            }
             view.setSelected(active);
             view.setContentDescription(text + (item && n.folder ? n.expanded ? ", expanded folder" : ", collapsed folder" : active ? ", current file" : ""));
             return view;
@@ -426,6 +523,7 @@ final class WorkspaceTree implements AutoCloseable {
 
     private final class RowView extends LinearLayout {
         final TextView arrow, label;
+        final Button actions;
         final ImageView icon;
         RowView() {
             super(ui);
@@ -441,6 +539,12 @@ final class WorkspaceTree implements AutoCloseable {
             label.setEllipsize(TextUtils.TruncateAt.END);
             label.setPadding(ui.dp(6), 0, 0, 0);
             addView(label, new LinearLayout.LayoutParams(0, -2, 1));
+            actions = new Button(ui, null, android.R.attr.borderlessButtonStyle);
+            actions.setText("⋮");
+            actions.setTextSize(20);
+            actions.setFocusable(false);
+            actions.setPadding(0, 0, 0, 0);
+            addView(actions, ui.dp(44), ui.dp(44));
         }
     }
 
