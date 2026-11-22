@@ -20,7 +20,7 @@ private:
     std::shared_ptr<std::atomic<bool>> stopped_ = std::make_shared<std::atomic<bool>>(false);
 };
 
-enum class SearchMode { filenames, contents };
+enum class SearchMode { filenames, contents, text_contents };
 
 struct SearchHit {
     std::filesystem::path path;
@@ -39,6 +39,7 @@ using HitCallback = std::function<void(SearchHit)>;
 
 // Filename searches match relative paths with ASCII case folding. Content searches
 // match literal bytes and report non-overlapping byte ranges in regular files.
+// text_contents skips common binary formats and files whose first sample contains NUL.
 SearchSummary search_workspace(const std::filesystem::path& root, std::string_view query,
                                SearchMode mode, std::size_t limit, const SearchCancellation& stop,
                                const HitCallback& on_hit);

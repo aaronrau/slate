@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <cstring>
 #include <dirent.h>
+#include <iterator>
 #include <memory>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -20,6 +21,32 @@ static_assert(sizeof(off_t) >= 8, "Slate requires 64-bit file offsets");
 
 char fold_ascii(char c) {
     return c >= 'A' && c <= 'Z' ? static_cast<char>(c + ('a' - 'A')) : c;
+}
+
+bool binary_filename(std::string_view name) {
+    // Some providers put the duplicate number after the extension, e.g. "clip.wav (1)".
+    if (!name.empty() && name.back() == ')') {
+        const auto suffix = name.rfind(" (");
+        if (suffix != name.npos) {
+            const auto digits = name.substr(suffix + 2, name.size() - suffix - 3);
+            if (!digits.empty() && digits.find_first_not_of("0123456789") == digits.npos)
+                name.remove_suffix(name.size() - suffix);
+        }
+    }
+    const auto dot = name.rfind('.');
+    if (dot == name.npos) return false;
+    const auto extension = name.substr(dot + 1);
+    static constexpr std::string_view binary[] = {
+        "wav", "mp3", "m4a", "aac", "flac", "opus", "ogg", "aif", "aiff", "amr", "au",
+        "caf", "mka", "oga", "pcm", "wma", "3gp", "avi", "m4v", "mkv", "mov", "mp4",
+        "mpeg", "webm", "bmp", "gif", "heic", "jpeg", "jpg", "png", "tiff", "webp",
+        "7z", "bz2", "gz", "pdf", "rar", "sqlite", "sqlite3", "xz", "zip"
+    };
+    return std::any_of(std::begin(binary), std::end(binary), [&](std::string_view format) {
+        return extension.size() == format.size() &&
+               std::equal(extension.begin(), extension.end(), format.begin(),
+                          [](char c, char lower) { return fold_ascii(c) == lower; });
+    });
 }
 
 struct File {
@@ -70,7 +97,7 @@ off_t extent_end(int fd, off_t from, off_t size, bool& use_extents) {
 }
 
 void scan_file(int directory, const char* name, const fs::path& root, const std::string& relative,
-               std::string_view query, std::size_t limit,
+               std::string_view query, bool text_only, std::size_t limit,
                const SearchCancellation& stop, const HitCallback& on_hit, SearchSummary& summary,
                std::vector<char>& buffer) {
     File file{::openat(directory, name, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW)};
@@ -90,6 +117,7 @@ void scan_file(int directory, const char* name, const fs::path& root, const std:
     if (buffer.size() < capacity) buffer.resize(capacity);
 
     off_t pos = 0;
+    bool sample = text_only;
     while (pos < st.st_size && !stop.stop_requested()) {
         pos = next_data(file.fd, pos, st.st_size, use_extents);
         if (pos == st.st_size) break;
@@ -97,7 +125,10 @@ void scan_file(int directory, const char* name, const fs::path& root, const std:
         std::size_t carry = 0;
         auto next_match = static_cast<std::uint64_t>(pos);
         while (pos < end && !stop.stop_requested()) {
-            const auto wanted = std::min<std::uint64_t>(chunk, static_cast<std::uint64_t>(end - pos));
+            // Reuse the text probe as the first searchable block, including matches
+            // that cross its end. Unknown binary files need at most one small read.
+            const auto read_size = sample ? std::min<std::size_t>(8192, chunk) : chunk;
+            const auto wanted = std::min<std::uint64_t>(read_size, static_cast<std::uint64_t>(end - pos));
             auto n = ::pread(file.fd, buffer.data() + carry, wanted, pos);
             if (n == 0) return;
             if (n < 0) {
@@ -105,6 +136,8 @@ void scan_file(int directory, const char* name, const fs::path& root, const std:
                 ++summary.errors;
                 return;
             }
+            if (sample && std::memchr(buffer.data() + carry, 0, n)) return;
+            sample = false;
             const auto size = carry + static_cast<std::size_t>(n);
             const auto base = static_cast<std::uint64_t>(pos) - carry;
             auto cursor = static_cast<std::size_t>(std::max(base, next_match) - base);
@@ -190,8 +223,12 @@ SearchSummary search_workspace(const fs::path& root, std::string_view query, Sea
             Directory stream(::fdopendir(child));
             if (!stream) { ::close(child); ++summary.errors; continue; }
             dirs.push_back({std::move(stream), relative.size()});
-        } else if (mode == SearchMode::contents) {
-            scan_file(fd, entry->d_name, root, relative, query, limit, stop, on_hit, summary, buffer);
+        } else if (mode != SearchMode::filenames) {
+            const bool text_only = mode == SearchMode::text_contents;
+            if (!text_only || !binary_filename(name)) {
+                scan_file(fd, entry->d_name, root, relative, query, text_only, limit,
+                          stop, on_hit, summary, buffer);
+            }
         } else {
             folded_path.resize(relative.size());
             std::transform(relative.begin(), relative.end(), folded_path.begin(), fold_ascii);

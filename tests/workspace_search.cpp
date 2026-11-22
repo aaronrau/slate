@@ -129,6 +129,24 @@ void traversal_and_cancellation() {
     check(missing.errors == 1, "missing root is reported");
 }
 
+void text_search_in_recordings_folder() {
+    TempDir temp;
+    const std::string query = "marker";
+    write(temp.path / "recording.WaV", query);
+    write(temp.path / "recording.wav (2)", query);
+    write(temp.path / "archive.sqlite3", query);
+    write(temp.path / "unknown", query + '\0' + "binary");
+    auto text = temp.path / "recording.wav.txt";
+    constexpr std::size_t offset = 8190;
+    write(text, std::string(offset, '.') + query);
+    auto hits = search(temp.path, query, SearchMode::text_contents);
+    check(hits.size() == 1 && hits.front().path == text && hits.front().offset == offset,
+          "text search skips audio and binary files and preserves offsets across the probe");
+    check(search(temp.path, query).size() == 5, "raw byte search includes binary files");
+    check(search(temp.path, "wav", SearchMode::filenames).size() == 3,
+          "recordings remain discoverable by name");
+}
+
 } // namespace
 
 int main() {
@@ -136,6 +154,7 @@ int main() {
         boundary_matches();
         sparse_offsets();
         traversal_and_cancellation();
+        text_search_in_recordings_folder();
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;
