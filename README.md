@@ -9,7 +9,7 @@ Slate is a native text editor for Linux, macOS, iPhone, iPad, and Android. All e
 
 On a phone, tap **☰** in the upper left to open **Files**. On a wider screen, the file tree sits beside the editor. Choose **Open Folder** and grant access in the system picker to add a folder to the tree. Tap a folder to expand it, then tap a filename to open it. Return to **Files** to continue browsing the same tree. Slate remembers granted folders across launches. Opening an individual file grants access to that file. To browse its siblings, choose its parent with **Open Folder**.
 
-Choose **New File** in a writable folder to create and open an empty file. Existing files are preserved if the name is already in use. To remove a file from storage, choose **Delete File** and confirm the filename. Cancel keeps the file and any open edits.
+Use **New File** in the sidebar to create a named file in a writable folder. On GTK, select the destination folder first. Existing files are preserved if the name is already in use. On Android, tap **⋮** beside a filename and choose **Delete file**. On iPhone or iPad, touch and hold the filename and choose **Delete File**. On the GTK desktop, select the file and click the sidebar trash button. Confirm the filename to remove it from storage. Cancel keeps the file and any open edits.
 
 The Apple app opens 64 KiB pages. Android uses 32 KiB for source and 128 KiB for preview. Both load the offline Markdown preview on demand and preserve the rest of the file when editing a page. Formatting constructs that cross a page boundary can render independently on each side. Document providers can require a local copy when a file cannot be read at arbitrary offsets.
 

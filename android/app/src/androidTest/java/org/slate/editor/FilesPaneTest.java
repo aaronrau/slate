@@ -198,10 +198,21 @@ public final class FilesPaneTest extends ActivityInstrumentationTestCase2<MainAc
         for (String other : new String[]{"Makefile", ".env", "custom.abcxyz"}) {
             Workspace.Created created = ws.create(nested, other);
             assertEquals(other, Workspace.info(activity.getContentResolver(), created.uri()).name());
-            Workspace.delete(activity, created.uri());
+            Workspace.delete(activity, Workspace.prepareDelete(activity, created.uri(), other));
         }
-        try { Workspace.delete(activity, nested); fail("Directory deletion was accepted"); }
+        try { Workspace.prepareDelete(activity, nested, "nested"); fail("Directory deletion was accepted"); }
         catch (IOException expected) { assertTrue(expected.getMessage().contains("Choose a file")); }
+        // Replace the actual inode behind the same DocumentsProvider URI
+        // while a previously inspected delete request is pending.
+        Uri replaced = ws.create(nested, "replaced.txt").uri();
+        Workspace.Deletion snapshot = Workspace.prepareDelete(activity, replaced, "replaced.txt");
+        String dir = "/sdcard/" + docId.substring("primary:".length()) + "/nested/";
+        shell("touch " + dir + "new-inode");
+        shell("mv -f " + dir + "new-inode " + dir + "replaced.txt");
+        try { Workspace.delete(activity, snapshot); fail("Replacement was deleted"); }
+        catch (IOException expected) { assertTrue(expected.getMessage().contains("changed")); }
+        assertEquals("replaced.txt", Workspace.info(activity.getContentResolver(), replaced).name());
+        Workspace.delete(activity, Workspace.prepareDelete(activity, replaced, "replaced.txt"));
         main(() -> {
             source(activity.getWindow().getDecorView()).append(" unsaved");
             return view("Actions for notes.md").performClick();

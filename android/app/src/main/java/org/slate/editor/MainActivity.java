@@ -657,7 +657,12 @@ public final class MainActivity extends Activity {
     }
 
     void deleteFile(Uri target, String name) {
-        if (busy) return;
+        if (!busy) runIO("Checking file…", () -> Workspace.prepareDelete(this, target, name), this::confirmDelete);
+    }
+
+    private void confirmDelete(Workspace.Deletion confirmed) {
+        Uri target = confirmed.uri();
+        String name = confirmed.name();
         boolean active = file.uri != null && Workspace.documentKey(file.uri).equals(Workspace.documentKey(target));
         boolean unsaved = active && file.dirty;
         AlertDialog.Builder confirm = dialog().setTitle("Delete “" + name + "”?")
@@ -667,7 +672,7 @@ public final class MainActivity extends Activity {
             .setPositiveButton(unsaved ? "Delete and discard edits" : "Delete", (d, w) -> {
                 remember();
                 runIO("Deleting file…", () -> {
-                    Workspace.delete(this, target);
+                    Workspace.delete(this, confirmed);
                     try { navigation.remove(target); return (RuntimeException)null; }
                     catch (RuntimeException cleanupError) { return cleanupError; }
                 }, cleanupError -> {

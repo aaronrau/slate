@@ -22,7 +22,9 @@ final class EditorFile implements AutoCloseable {
     private Revision opened;
 
     private record FileStamp(long device, long inode, long size, long seconds, long nanos) {}
-    private record Revision(Metadata row, FileStamp file) {
+    record Revision(Metadata row, FileStamp file) {
+        boolean cannotConfirm(Revision current) { return (file != null && current.file == null) || changed(current); }
+
         boolean changed(Revision current) {
             // A MediaStore catalog row may be indexed after its bytes are already
             // visible. The opened file and its directory entry are authoritative.
@@ -38,6 +40,17 @@ final class EditorFile implements AutoCloseable {
             long nanos = Build.VERSION.SDK_INT >= 27 ? stat.st_mtim.tv_nsec : 0;
             return new FileStamp(stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime, nanos);
         } catch (android.system.ErrnoException e) { throw new IOException(e); }
+    }
+
+    static Revision deletionRevision(ContentResolver resolver, Uri uri, Metadata row, boolean inspectFile) {
+        if (inspectFile) {
+            try (ParcelFileDescriptor fd = resolver.openFileDescriptor(uri, "r")) {
+                if (fd != null) return new Revision(row, stamp(fd));
+            } catch (IOException | SecurityException | UnsupportedOperationException ignored) {
+                // Delete permission can be independent of permission to read the bytes.
+            }
+        }
+        return new Revision(row, null);
     }
 
     private static Revision revision(ContentResolver resolver, Uri uri, boolean inspectFile) throws IOException {

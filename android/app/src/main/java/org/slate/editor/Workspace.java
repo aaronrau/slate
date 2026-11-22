@@ -76,13 +76,19 @@ final class Workspace {
         return null;
     }
 
-    record Info(String name, String mime, int flags) {}
+    record Info(String name, String mime, int flags, EditorFile.Metadata metadata) {}
 
     static Info info(ContentResolver resolver, Uri doc) throws IOException {
-        String[] fields = {Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE, Document.COLUMN_FLAGS};
+        String[] fields = {Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE, Document.COLUMN_FLAGS,
+            Document.COLUMN_SIZE, Document.COLUMN_LAST_MODIFIED};
         try (Cursor c = resolver.query(doc, fields, null, null, null)) {
             if (c == null || !c.moveToFirst()) throw new FileNotFoundException("This item is no longer available.");
-            return new Info(c.getString(0), c.getString(1), c.getInt(2));
+            String name = c.getString(c.getColumnIndexOrThrow(Document.COLUMN_DISPLAY_NAME));
+            int size = c.getColumnIndex(Document.COLUMN_SIZE), modified = c.getColumnIndex(Document.COLUMN_LAST_MODIFIED);
+            EditorFile.Metadata metadata = new EditorFile.Metadata(name, size < 0 || c.isNull(size) ? null : c.getLong(size),
+                modified < 0 || c.isNull(modified) ? null : c.getLong(modified));
+            return new Info(name, c.getString(c.getColumnIndexOrThrow(Document.COLUMN_MIME_TYPE)),
+                c.getInt(c.getColumnIndexOrThrow(Document.COLUMN_FLAGS)), metadata);
         }
     }
 
@@ -115,15 +121,36 @@ final class Workspace {
         return new Created(created, -1);
     }
 
-    static void delete(Context context, Uri target) throws IOException {
+    record Deletion(Uri uri, String name, String mime, EditorFile.Revision revision) {}
+
+    static Deletion prepareDelete(Context context, Uri target, String displayName) throws IOException {
         if (!DocumentsContract.isDocumentUri(context, target))
             throw new IOException("This provider does not support deleting this file in Slate.");
         ContentResolver resolver = context.getContentResolver();
-        Info doc = info(resolver, target);
+        Info doc;
+        try {
+            doc = info(resolver, target);
+        } catch (SecurityException denied) {
+            // Some providers grant deletion and expose the MIME type without
+            // granting access to the metadata cursor or file bytes.
+            doc = new Info(displayName, resolver.getType(target), Document.FLAG_SUPPORTS_DELETE,
+                new EditorFile.Metadata(displayName, null, null));
+        }
         if (doc.mime == null || Document.MIME_TYPE_DIR.equals(doc.mime)) throw new IOException("Choose a file to delete.");
         if ((doc.flags & Document.FLAG_SUPPORTS_DELETE) == 0) throw new IOException("This file is read-only.");
+        boolean inspectFile = (doc.flags & Document.FLAG_VIRTUAL_DOCUMENT) == 0;
+        return new Deletion(target, doc.name == null ? displayName : doc.name, doc.mime,
+            EditorFile.deletionRevision(resolver, target, doc.metadata, inspectFile));
+    }
+
+    static void delete(Context context, Deletion confirmed) throws IOException {
+        Deletion current = prepareDelete(context, confirmed.uri, confirmed.name);
+        if (!confirmed.name.equals(current.name) || !confirmed.mime.equals(current.mime)
+            || confirmed.revision.cannotConfirm(current.revision))
+            throw new IOException("The file changed while deletion was being confirmed. Check it before trying again.");
         try {
-            if (!DocumentsContract.deleteDocument(resolver, target)) throw new IOException("The provider did not delete this file.");
+            if (!DocumentsContract.deleteDocument(context.getContentResolver(), confirmed.uri))
+                throw new IOException("The provider did not delete this file.");
         } catch (SecurityException denied) { throw new IOException("Slate does not have permission to delete this file.", denied); }
     }
 
