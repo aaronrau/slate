@@ -76,8 +76,7 @@ struct FilesSidebar: View {
                         }
                         if workspace.locations.isEmpty { note("Open a folder to browse its files.") }
                         OpenedFiles(history: model.history, select: selectTab, reveal: { tab in
-                            do { showInFolder(try model.history.acquire(tab)) }
-                            catch { model.errorMessage = error.localizedDescription }
+                            showInFolder(model.history.folderHint(for: tab))
                         }, delete: { tab in
                             do { model.requestDeletion(try model.history.acquire(tab), tabID: tab.id) }
                             catch { model.errorMessage = error.localizedDescription }

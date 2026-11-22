@@ -299,7 +299,8 @@ final class SlateTests: XCTestCase {
         XCTAssertEqual(parent.displayedRows.first?.url.lastPathComponent, "transcript.txt")
         workspace.forget(location)
         requested = nil
-        workspace.showInFolder(file) { requested = $0 }
+        let formerGrant = ScopedURL(file.url, parent: ScopedURL(root))
+        workspace.showInFolder(formerGrant) { requested = $0 }
         try await waitUntil { requested != nil }
         XCTAssertTrue(workspace.locations.isEmpty)
     }

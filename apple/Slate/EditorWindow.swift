@@ -210,8 +210,7 @@ struct TabStrip: View {
                                 .id(item.id).buttonStyle(.plain).help(item.path)
                                 .contextMenu {
                                     Button("Show in Folder") {
-                                        do { showInFolder(try history.acquire(item)) }
-                                        catch { model.errorMessage = error.localizedDescription }
+                                        showInFolder(history.folderHint(for: item))
                                     }
                                 }
                                 .accessibilityIdentifier("document-tab-" + item.name)

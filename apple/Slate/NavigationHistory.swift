@@ -98,6 +98,11 @@ final class NavigationHistory: ObservableObject {
         return try reference.acquire()
     }
 
+    func folderHint(for tab: Tab) -> ScopedURL {
+        // A stale file bookmark still has a path to seed the system picker.
+        (try? acquire(tab)) ?? ScopedURL(URL(fileURLWithPath: tab.path))
+    }
+
     private(set) var hasEarlierTabs = false
     private(set) var hasLaterTabs = false
     func shiftStrip(forward: Bool) {

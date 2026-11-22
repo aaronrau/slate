@@ -179,7 +179,12 @@ final class DirectoryBranch: ObservableObject {
         }
     }
 
-    func reload() {
+    func reload(resetTree: Bool = false) {
+        if resetTree {
+            pinned = nil
+            children.removeAll()
+            pageIndex = 0
+        }
         cursor = DirectoryCursor(url: url, access: access, database: database)
         warming = false
         busy = false
@@ -261,6 +266,7 @@ final class WorkspaceModel: ObservableObject {
     private let defaults: UserDefaults?
     private let savedFolders = "Slate.workspaceFolders"
     private let lastFolder = "Slate.activeWorkspaceFolder"
+    private var forgottenGrants: Set<String>
     private let queue = DispatchQueue(label: "org.slateeditor.search", qos: .userInitiated)
     private var searchJob: SearchJob?
 
@@ -278,6 +284,7 @@ final class WorkspaceModel: ObservableObject {
     init(defaults: UserDefaults? = nil, documents: URL? = nil, database: URL? = nil) {
         self.database = database
         self.defaults = defaults
+        forgottenGrants = Set(defaults?.stringArray(forKey: "Slate.forgottenWorkspaceFolders") ?? [])
         if let data = defaults?.data(forKey: savedFolders),
            let folders = try? JSONDecoder().decode([FolderLocation].self, from: data) {
             locations = folders
@@ -294,6 +301,7 @@ final class WorkspaceModel: ObservableObject {
 
     func open(folder: URL) {
         let access = ScopedURL(folder)
+        forgottenGrants.remove(folder.standardizedFileURL.path)
         let existing = locations.firstIndex { $0.reference.url.standardizedFileURL.path == folder.standardizedFileURL.path }
         let old = existing.map { locations[$0] }
         let location = FolderLocation(id: old?.id ?? UUID(), title: old?.local == true ? "Slate Documents" : folder.lastPathComponent,
@@ -309,7 +317,7 @@ final class WorkspaceModel: ObservableObject {
     func includeGrant(for file: ScopedURL?) {
         // Documents from older sessions can carry the original folder bookmark.
         // An individually picked document only grants access to that file.
-        guard let grant = file?.parent,
+        guard let grant = file?.parent, !forgottenGrants.contains(grant.url.standardizedFileURL.path),
               !locations.contains(where: { $0.reference.url.standardizedFileURL.path == grant.url.standardizedFileURL.path }) else { return }
         let folder = FolderLocation(id: UUID(), title: grant.url.lastPathComponent, reference: grant.reference, local: false)
         locations.append(folder)
@@ -373,6 +381,7 @@ final class WorkspaceModel: ObservableObject {
 
     func forget(_ location: FolderLocation) {
         guard !location.local else { return }
+        forgottenGrants.insert(location.reference.url.standardizedFileURL.path)
         if let database {
             let path = expanded[location.id]?.url.path ?? location.reference.url.path
             queue.async { slate_directory_forget(database.path, path) }
@@ -385,6 +394,7 @@ final class WorkspaceModel: ObservableObject {
     }
 
     private func persist() {
+        defaults?.set(Array(forgottenGrants), forKey: "Slate.forgottenWorkspaceFolders")
         if let data = try? JSONEncoder().encode(locations.filter { !$0.local }) { defaults?.set(data, forKey: savedFolders) }
     }
 
@@ -436,7 +446,7 @@ final class WorkspaceModel: ObservableObject {
 
     func refresh() {
         for location in locations where expanded[location.id] != nil || errors[location.id] != nil {
-            if let branch = expanded[location.id] { branch.reload() } else { expand(location) }
+            if let branch = expanded[location.id] { branch.reload(resetTree: true) } else { expand(location) }
         }
         search()
     }
@@ -461,7 +471,10 @@ final class WorkspaceModel: ObservableObject {
             var errors: Int64 = 0
             for location in locations {
                 if job.isCancelled || job.rows.count >= 200 { break }
-                do { errors += max(0, try job.run(location, database: database, query: query, contents: contents)) }
+                do {
+                    let result = try job.run(location, database: database, query: query, contents: contents)
+                    errors += result < 0 ? 1 : result
+                }
                 catch { errors += 1 }
             }
             DispatchQueue.main.async {

@@ -2,7 +2,15 @@
 #include "DirectoryIndex.h"
 #include "search.hpp"
 
+#include <algorithm>
+#include <cerrno>
+#include <cstring>
+#include <dirent.h>
+#include <fcntl.h>
 #include <memory>
+#include <sqlite3.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <string>
 #include <vector>
 
@@ -13,28 +21,87 @@ struct Entry {
     std::string name;
     bool folder;
 };
+// Most source trees contain many small folders. Use one indexed lookup per
+// folder, then scan small, uncached folders without an SQLite connection each.
+class SnapshotLookup {
+    sqlite3* db = nullptr;
+    sqlite3_stmt* lookup = nullptr;
+public:
+    explicit SnapshotLookup(const char* database) {
+        if (database && *database && sqlite3_open_v2(database, &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK)
+            sqlite3_prepare_v2(db, "SELECT 1 FROM folders WHERE path=?", -1, &lookup, nullptr);
+    }
+    ~SnapshotLookup() { sqlite3_finalize(lookup); sqlite3_close(db); }
+    bool contains(const std::string& path) {
+        if (!lookup) return false;
+        sqlite3_bind_text(lookup, 1, path.c_str(), -1, SQLITE_TRANSIENT);
+        const bool found = sqlite3_step(lookup) == SQLITE_ROW;
+        sqlite3_reset(lookup);
+        return found;
+    }
+};
+std::string lowerASCII(std::string value) {
+    for (auto& ch : value) if (ch >= 'A' && ch <= 'Z') ch += 'a' - 'A';
+    return value;
+}
 struct Folder {
     std::string path, prefix;
-    std::unique_ptr<SlateDirectory, decltype(&slate_directory_close)> listing;
+    std::unique_ptr<SlateDirectory, decltype(&slate_directory_close)> listing{nullptr, slate_directory_close};
     std::vector<Entry> matches;
     int64_t offset = 0;
     size_t next = 0;
     bool finished = false;
-    Folder(std::string path, std::string prefix, const char* database)
-        : path(std::move(path)), prefix(std::move(prefix)),
-          listing(slate_directory_open(this->path.c_str(), database), slate_directory_close) {}
+    bool error = false;
+
+    Folder(std::string path, std::string prefix, const char* database, SnapshotLookup& known, const std::string& needle)
+        : path(std::move(path)), prefix(std::move(prefix)) {
+        if (!known.contains(this->path) && readSmall(needle)) return;
+        listing.reset(slate_directory_open(this->path.c_str(), database));
+    }
+
+    bool readSmall(const std::string& needle) {
+        const int fd = open(path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+        if (fd < 0) { finished = error = true; return true; }
+        std::unique_ptr<DIR, decltype(&closedir)> stream(fdopendir(fd), closedir);
+        if (!stream) { close(fd); finished = error = true; return true; }
+        int rows = 0;
+        while (rows <= 128) {
+            errno = 0;
+            const auto* entry = readdir(stream.get());
+            if (!entry) {
+                if (errno == EINTR) continue;
+                finished = true;
+                error = errno != 0;
+                return true;
+            }
+            if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+            ++rows;
+            auto type = entry->d_type;
+            if (type == DT_UNKNOWN) {
+                struct stat info{};
+                if (fstatat(fd, entry->d_name, &info, AT_SYMLINK_NOFOLLOW)) continue;
+                type = S_ISREG(info.st_mode) ? DT_REG : S_ISDIR(info.st_mode) ? DT_DIR : DT_UNKNOWN;
+            }
+            if (type == DT_DIR || (type == DT_REG && lowerASCII(prefix + entry->d_name).find(needle) != std::string::npos))
+                matches.push_back({entry->d_name, type == DT_DIR});
+        }
+        matches.clear();
+        return false;
+    }
 };
 
 int64_t searchNames(SlateSearch* scope, const char* root, const char* database, const char* query,
                     size_t limit, void* context, SlateSearchHit hit) {
     std::vector<Folder> stack;
-    stack.emplace_back(root, "", database);
+    SnapshotLookup known(database);
+    auto folded = lowerASCII(query);
+    stack.emplace_back(root, "", database, known, folded);
     int64_t errors = 0;
     size_t reported = 0;
     while (!stack.empty() && reported < limit && !scope->cancellation.stop_requested()) {
         auto& folder = stack.back();
         if (folder.next == folder.matches.size()) {
-            if (folder.finished) { stack.pop_back(); continue; }
+            if (folder.finished) { errors += folder.error; stack.pop_back(); continue; }
             folder.next = 0;
             folder.matches.clear();
             constexpr int batch = 256;
@@ -51,7 +118,7 @@ int64_t searchNames(SlateSearch* scope, const char* root, const char* database, 
         auto path = folder.path + "/" + entry.name;
         if (entry.folder) {
             auto prefix = folder.prefix + entry.name + "/";
-            stack.emplace_back(std::move(path), std::move(prefix), database);
+            stack.emplace_back(std::move(path), std::move(prefix), database, known, folded);
         } else {
             hit(context, path.c_str(), 0, 0, "");
             ++reported;
