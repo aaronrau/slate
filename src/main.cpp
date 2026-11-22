@@ -310,6 +310,24 @@ class Window {
         else if (response == GTK_RESPONSE_REJECT) next();
     }
 
+    void switch_document(const fs::path& path, uint64_t offset = 0, size_t bytes = 0,
+                         const std::string& fragment = {}, std::int64_t visit = 0,
+                         bool close_tab = false, bool start_in_source = false) {
+        Document opened;
+        if (!path.empty()) opened.open(path);
+        auto remembered = history_.position(path);
+        history_.remember(document_.path(), editor_.cursor(), in_preview());
+        history_.visit(path, visit, close_tab);
+        document_ = std::move(opened);
+        editor_.reset();
+        auto cursor = (bytes || offset || !fragment.empty() || !remembered) ? offset : remembered->cursor;
+        if (cursor || bytes) editor_.jump(cursor, bytes);
+        update_file();
+        bool preview = markdown(path) && !bytes && !start_in_source &&
+                       (!fragment.empty() || !remembered || remembered->preview.value_or(true));
+        set_view(preview, true, fragment);
+    }
+
     void open_file(const fs::path& path, uint64_t offset = 0, size_t bytes = 0, bool reload = false,
                    const std::string& fragment = {}, std::int64_t visit = 0, bool close_tab = false) {
         if (saving_) return;
@@ -320,19 +338,7 @@ class Window {
             return;
         }
         with_clean_document([this, path, offset, bytes, fragment, visit, close_tab] {
-            Document opened;
-            if (!path.empty()) opened.open(path);
-            auto remembered = history_.position(path);
-            history_.remember(document_.path(), editor_.cursor(), in_preview());
-            history_.visit(path, visit, close_tab);
-            document_ = std::move(opened);
-            editor_.reset();
-            auto cursor = (bytes || offset || !fragment.empty() || !remembered) ? offset : remembered->cursor;
-            if (cursor || bytes) editor_.jump(cursor, bytes);
-            update_file();
-            bool preview = markdown(path) && !bytes && (!fragment.empty() || !remembered ||
-                                                        remembered->preview.value_or(true));
-            set_view(preview, true, fragment);
+            switch_document(path, offset, bytes, fragment, visit, close_tab);
         });
     }
 
@@ -375,6 +381,81 @@ class Window {
     void open_dialog() {
         if (saving_) return;
         if (auto file = choose(GTK_FILE_CHOOSER_ACTION_OPEN)) open_file(*file, 0, 0, true);
+    }
+
+    void new_workspace_file(const fs::path& folder) {
+        if (saving_) return;
+        auto* dialog = gtk_dialog_new_with_buttons("New File", GTK_WINDOW(win_), GTK_DIALOG_MODAL,
+            "_Cancel", GTK_RESPONSE_CANCEL, "_Create", GTK_RESPONSE_ACCEPT, nullptr);
+        gtk_dialog_set_default_response(GTK_DIALOG(dialog), GTK_RESPONSE_ACCEPT);
+        auto* box = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+        gtk_container_set_border_width(GTK_CONTAINER(box), 12);
+        gtk_box_set_spacing(GTK_BOX(box), 8);
+        auto* location = label(("Create a file in " + display_name(folder)).c_str());
+        gtk_label_set_ellipsize(GTK_LABEL(location), PANGO_ELLIPSIZE_MIDDLE);
+        gtk_label_set_max_width_chars(GTK_LABEL(location), 54);
+        gtk_label_set_xalign(GTK_LABEL(location), 0);
+        gtk_box_pack_start(GTK_BOX(box), location, FALSE, FALSE, 0);
+        auto* entry = gtk_entry_new();
+        gtk_entry_set_placeholder_text(GTK_ENTRY(entry), "File name");
+        atk_object_set_name(gtk_widget_get_accessible(entry), "File name");
+        gtk_entry_set_activates_default(GTK_ENTRY(entry), TRUE);
+        gtk_box_pack_start(GTK_BOX(box), entry, FALSE, FALSE, 0);
+        gtk_widget_show_all(box);
+        gtk_widget_grab_focus(entry);
+        bool create = gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT;
+        std::string name = gtk_entry_get_text(GTK_ENTRY(entry));
+        gtk_widget_destroy(dialog);
+        if (create) with_clean_document([this, folder, name] {
+            auto file = workspace_.create_file(folder, name);
+            switch_document(file, 0, 0, {}, 0, false, true);
+        });
+    }
+
+    void delete_workspace_file(const fs::path& file) {
+        if (saving_) return;
+        const auto open = document_.path();
+        std::error_code ec;
+        bool same_file = file == open || (!open.empty() && fs::equivalent(file, open, ec));
+        bool dirty = same_file && document_.dirty();
+        bool removed = workspace_.delete_file(file, [&] {
+            auto name = display_name(file.filename());
+            auto* dialog = gtk_message_dialog_new(GTK_WINDOW(win_), GTK_DIALOG_MODAL,
+                GTK_MESSAGE_WARNING, GTK_BUTTONS_NONE, "Delete “%s”?", name.c_str());
+            gtk_window_set_title(GTK_WINDOW(dialog), "Delete File");
+            auto message = display_name(file) + "\n\nThis permanently deletes the file.";
+            if (dirty) message += " Unsaved changes in this file will be discarded.";
+            gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dialog), "%s", message.c_str());
+            gtk_dialog_add_button(GTK_DIALOG(dialog), "_Cancel", GTK_RESPONSE_CANCEL);
+            auto* remove = gtk_dialog_add_button(GTK_DIALOG(dialog),
+                dirty ? "_Delete and Discard Changes" : "_Delete", GTK_RESPONSE_ACCEPT);
+            style(remove, GTK_STYLE_CLASS_DESTRUCTIVE_ACTION);
+            gtk_dialog_set_default_response(GTK_DIALOG(dialog), GTK_RESPONSE_CANCEL);
+            bool accepted = gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT;
+            gtk_widget_destroy(dialog);
+            return accepted;
+        });
+        if (!removed) return;
+        history_.forget(file);
+        // A different hard link still names an editable file. A symbolic link to
+        // the removed entry has lost its backing and needs to leave the editor.
+        if (same_file && (file == open || !fs::exists(open, ec))) {
+            if (open != file) history_.forget(open);
+            auto saved = restored_visit();
+            if (saved) {
+                try { switch_document(saved->path, 0, 0, {}, saved->visit); }
+                catch (...) { switch_document({}); throw; }
+            } else switch_document({});
+        } else update_file();
+    }
+
+    std::optional<HistoryFile> restored_visit() const {
+        auto saved = history_.current();
+        if (saved && !available(saved->path)) {
+            saved = available_visit(false);
+            if (!saved) saved = available_visit(true);
+        }
+        return saved;
     }
 
     void request_close() {
@@ -637,6 +718,12 @@ public:
         workspace_.on_open = [this](const fs::path& path, uint64_t pos, size_t bytes) {
             run([&] { open_file(path, pos, bytes); });
         };
+        workspace_.on_new_file = [this](const fs::path& folder) {
+            run([&] { new_workspace_file(folder); });
+        };
+        workspace_.on_delete_file = [this](const fs::path& file) {
+            run([&] { delete_workspace_file(file); });
+        };
         g_signal_connect_after(win_, "set-focus", G_CALLBACK(+[](GtkWindow*, GtkWidget* focus,
                                                                  gpointer data) {
             static_cast<Window*>(data)->update_edit_items(focus);
@@ -653,11 +740,7 @@ public:
     void show(const std::optional<fs::path>& file) {
         if (file) open_file(*file, 0, 0, true);
         else {
-            auto saved = history_.current();
-            if (saved && !available(saved->path)) {
-                saved = available_visit(false);
-                if (!saved) saved = available_visit(true);
-            }
+            auto saved = restored_visit();
             if (saved) open_file(saved->path, 0, 0, true, {}, saved->visit);
             else open_file({}, 0, 0, true);
         }

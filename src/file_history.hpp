@@ -33,6 +33,7 @@ public:
     void visit(const std::filesystem::path& path, std::int64_t existing_visit = 0,
                bool close_current_tab = false);
     void saved_as(const std::filesystem::path& path);
+    void forget(const std::filesystem::path& path);
 
 private:
     sqlite3* db_ = nullptr;

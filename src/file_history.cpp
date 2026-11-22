@@ -89,6 +89,7 @@ void FileHistory::initialize(const std::filesystem::path& path) {
                 "cursor INTEGER NOT NULL DEFAULT 0,preview INTEGER);"
               "CREATE TABLE IF NOT EXISTS tabs(id INTEGER PRIMARY KEY,file INTEGER UNIQUE NOT NULL);"
               "CREATE TABLE IF NOT EXISTS visits(id INTEGER PRIMARY KEY,file INTEGER NOT NULL);"
+              "CREATE INDEX IF NOT EXISTS visits_by_file ON visits(file);"
               "CREATE TABLE IF NOT EXISTS state(id INTEGER PRIMARY KEY,here INTEGER NOT NULL);"
               "INSERT OR IGNORE INTO state VALUES(1,0); COMMIT;");
 }
@@ -146,6 +147,30 @@ void FileHistory::visit(const std::filesystem::path& path, std::int64_t existing
 
 void FileHistory::saved_as(const std::filesystem::path& path) {
     change(path, 0, true, true);
+}
+
+void FileHistory::forget(const std::filesystem::path& path) {
+    exec(db_, "BEGIN");
+    try {
+        Statement lookup(db_, "SELECT id FROM files WHERE path=?");
+        lookup.path(1, path);
+        if (lookup.step()) {
+            auto id = lookup.integer(0);
+            for (const auto* sql : {"DELETE FROM visits WHERE file=?", "DELETE FROM tabs WHERE file=?",
+                                    "DELETE FROM files WHERE id=?"}) {
+                Statement drop(db_, sql);
+                drop.number(1, id);
+                drop.step();
+            }
+            exec(db_, "UPDATE state SET here=coalesce((SELECT max(id) FROM visits WHERE id<state.here),"
+                      "(SELECT min(id) FROM visits WHERE id>state.here),0) "
+                      "WHERE NOT EXISTS(SELECT 1 FROM visits WHERE id=state.here)");
+        }
+        exec(db_, "COMMIT");
+    } catch (...) {
+        sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
+        throw;
+    }
 }
 
 void FileHistory::change(const std::filesystem::path& path, std::int64_t existing_visit,

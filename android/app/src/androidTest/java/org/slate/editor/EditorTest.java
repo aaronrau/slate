@@ -164,6 +164,39 @@ public final class EditorTest extends ActivityInstrumentationTestCase2<MainActiv
         } finally { context.deleteDatabase(dbName); }
     }
 
+    public void testMigratingNavigationAndRemovingAlternateGrants() {
+        Context context = getInstrumentation().getTargetContext();
+        String name = "navigation-v1-" + System.nanoTime();
+        Uri loose = Uri.parse("content://provider/document/a%2Fb"),
+            tree = Uri.parse("content://provider/tree/a/document/a%2Fb"),
+            kept = Uri.parse("content://provider/document/c");
+        try {
+            try (android.database.sqlite.SQLiteDatabase old = context.openOrCreateDatabase(name, Context.MODE_PRIVATE, null)) {
+                old.execSQL("CREATE TABLE tabs(id INTEGER PRIMARY KEY, uri TEXT NOT NULL UNIQUE, name TEXT NOT NULL, offset INTEGER NOT NULL, preview INTEGER NOT NULL)");
+                old.execSQL("CREATE TABLE visits(id INTEGER PRIMARY KEY, tab INTEGER NOT NULL, offset INTEGER NOT NULL, preview INTEGER NOT NULL)");
+                old.execSQL("CREATE TABLE position(visit INTEGER NOT NULL)");
+                old.execSQL("INSERT INTO position VALUES(3)");
+                int tab = 0;
+                for (Uri uri : new Uri[]{loose, kept, tree}) {
+                    tab++;
+                    old.execSQL("INSERT INTO tabs VALUES(?,?,?,?,0)", new Object[]{tab, uri.toString(), "File " + tab, tab * 20});
+                    old.execSQL("INSERT INTO visits VALUES(?,?,?,0)", new Object[]{tab, tab, tab * 20});
+                }
+                old.setVersion(1);
+            }
+            try (Navigation migrated = new Navigation(context, name)) {
+                assertEquals(tree, migrated.relative(0).uri());
+                assertEquals(3, migrated.tabCount());
+                migrated.remove(tree);
+                assertEquals(1, migrated.tabCount());
+                assertEquals(kept, migrated.tabAt(0).uri());
+                assertEquals(40L, migrated.relative(0).offset());
+                assertNull(migrated.relative(1));
+                assertNull(migrated.relative(-1));
+            }
+        } finally { context.deleteDatabase(name); }
+    }
+
     public void testNativeSparseDescriptorAndUtf8Edits() throws Exception {
         Context context = getInstrumentation().getTargetContext();
         File input = File.createTempFile("slate-test", ".txt", context.getCacheDir());
