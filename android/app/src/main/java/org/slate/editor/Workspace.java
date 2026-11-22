@@ -26,14 +26,20 @@ final class Workspace {
     final Uri tree;
     final Uri root;
     private final ContentResolver resolver;
+    final DirectoryIndex index;
 
-    Workspace(ContentResolver resolver, Uri tree) {
+    Workspace(Context context, Uri tree) {
+        this(context.getContentResolver(), tree, DirectoryIndex.get(context));
+    }
+
+    Workspace(ContentResolver resolver, Uri tree, DirectoryIndex index) {
         this.resolver = resolver;
+        this.index = index;
         this.tree = tree;
         root = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree));
     }
 
-    private Cursor children(Uri folder, CancellationSignal cancel) throws IOException {
+    Cursor children(Uri folder, CancellationSignal cancel) throws IOException {
         String id = DocumentsContract.getDocumentId(folder);
         Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, id);
         Cursor cursor = resolver.query(children, COLUMNS, null, null, null, cancel);
@@ -41,22 +47,54 @@ final class Workspace {
         return cursor;
     }
 
-    private Entry entry(Cursor c, String parent) {
-        String name = c.getString(1);
-        return new Entry(name, parent + name, DocumentsContract.buildDocumentUriUsingTree(tree, c.getString(0)),
-            Document.MIME_TYPE_DIR.equals(c.getString(2)), -1, 0);
+    Entry entry(DirectoryIndex.Row row, String prefix) {
+        return new Entry(row.name(), prefix + row.name(), DocumentsContract.buildDocumentUriUsingTree(tree, row.id()),
+            row.directory(), -1, 0);
     }
 
     Listing list(Uri folder, int skip, CancellationSignal cancel) throws IOException {
+        if (cancel == null) cancel = new CancellationSignal();
+        index.checkAccess(tree);
+        DirectoryIndex.Window w = index.window(this, folder, skip + PAGE, true, cancel);
         ArrayList<Entry> entries = new ArrayList<>();
-        try (Cursor c = children(folder, cancel)) {
-            c.moveToPosition(skip - 1);
-            while (entries.size() < PAGE && c.moveToNext()) entries.add(entry(c, ""));
-            boolean more = c.moveToNext();
-            entries.sort(Comparator.comparing(Entry::directory).reversed()
-                .thenComparing(Entry::name, String.CASE_INSENSITIVE_ORDER));
-            return new Listing(entries, more);
+        for (DirectoryIndex.Row row : index.rows(w.id(), folder, skip, skip + PAGE, PAGE, cancel)) entries.add(entry(row, ""));
+        entries.sort(Comparator.comparing(Entry::directory).reversed().thenComparing(Entry::name, String.CASE_INSENSITIVE_ORDER));
+        return new Listing(entries, !w.complete() || w.count() > skip + PAGE);
+    }
+
+    // ExternalStorageProvider documents use volume:path IDs. Other providers own
+    // their IDs and may supply an opaque value unrelated to their hierarchy.
+    static final String EXTERNAL = "com.android.externalstorage.documents";
+    static List<String> externalPath(Uri tree, Uri file) {
+        if (!EXTERNAL.equals(tree.getAuthority()) || !EXTERNAL.equals(file.getAuthority())) return Collections.emptyList();
+        String root = DocumentsContract.getTreeDocumentId(tree);
+        String id;
+        try { id = DocumentsContract.getDocumentId(file); } catch (IllegalArgumentException e) { return Collections.emptyList(); }
+        String prefix = root.endsWith(":") ? root : root + "/";
+        if (!id.startsWith(prefix)) return Collections.emptyList();
+        ArrayList<String> path = new ArrayList<>();
+        path.add(root);
+        int slash = prefix.length();
+        while ((slash = id.indexOf('/', slash)) >= 0) path.add(id.substring(0, slash++));
+        path.add(id);
+        return path;
+    }
+
+    static Uri parentHint(ContentResolver resolver, Uri file) {
+        if (EXTERNAL.equals(file.getAuthority())) {
+            try {
+                String id = DocumentsContract.getDocumentId(file);
+                int colon = id.indexOf(':'), slash = id.lastIndexOf('/');
+                if (colon >= 0) return DocumentsContract.buildDocumentUri(EXTERNAL,
+                    id.substring(0, slash > colon ? slash : colon + 1));
+            } catch (IllegalArgumentException ignored) {}
         }
+        try {
+            DocumentsContract.Path path = DocumentsContract.findDocumentPath(resolver, file);
+            if (path != null && path.getPath().size() >= 2) return DocumentsContract.buildDocumentUri(file.getAuthority(),
+                path.getPath().get(path.getPath().size() - 2));
+        } catch (Exception ignored) { /* A single-file grant may not expose any ancestor. */ }
+        return file;
     }
 
     static String documentKey(Uri uri) {
@@ -92,7 +130,7 @@ final class Workspace {
         }
     }
 
-    record Created(Uri uri, int pageStart) {}
+    record Created(Uri uri) {}
 
     Created create(Uri parent, String name) throws IOException {
         String problem = invalidName(name);
@@ -100,10 +138,28 @@ final class Workspace {
         Info folder = info(resolver, parent);
         if (!Document.MIME_TYPE_DIR.equals(folder.mime) || (folder.flags & Document.FLAG_DIR_SUPPORTS_CREATE) == 0)
             throw new IOException("This folder does not allow new files.");
-        try (Cursor c = children(parent, null)) {
-            while (c.moveToNext()) if (name.equals(c.getString(1)))
-                throw new IOException("A file or folder named “" + name + "” already exists.");
+        index.checkAccess(tree);
+        // A live check catches names created outside Slate since the last Refresh.
+        // ExternalStorageProvider can resolve one candidate from its volume:path ID.
+        boolean exists = false;
+        boolean listSiblings = !EXTERNAL.equals(tree.getAuthority());
+        if (EXTERNAL.equals(tree.getAuthority())) {
+            Uri candidate = DocumentsContract.buildDocumentUriUsingTree(tree,
+                DirectoryIndex.childPrefix(DocumentsContract.getDocumentId(parent)) + name);
+            try { info(resolver,candidate); exists = true; }
+            catch (FileNotFoundException missing) { /* This name is available. */ }
+            catch (IllegalArgumentException unsupported) {
+                // Some provider versions verify isChildDocument before checking
+                // existence and return IllegalArgumentException for a missing child.
+                listSiblings = true;
+            }
         }
+        if (listSiblings) {
+            try (Cursor c = children(parent, null)) {
+                while (c.moveToNext()) if (name.equals(c.getString(1))) { exists = true; break; }
+            }
+        }
+        if (exists) throw new IOException("A file or folder named “" + name + "” already exists.");
         int dot = name.lastIndexOf('.');
         String mime = dot > 0 && dot < name.length() - 1
             ? MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substring(dot + 1).toLowerCase(Locale.ROOT)) : null;
@@ -112,13 +168,12 @@ final class Workspace {
             created = DocumentsContract.createDocument(resolver, parent, mime == null ? "application/octet-stream" : mime, name);
         } catch (SecurityException denied) { throw new IOException("Slate does not have write access to this folder.", denied); }
         if (created == null) throw new IOException("The provider could not create this file.");
-        // Reveal the new row even when the provider places it on a later
-        // directory page. Only the cursor window is held while locating it.
-        String id = DocumentsContract.getDocumentId(created);
-        try (Cursor c = children(parent, null)) {
-            while (c.moveToNext()) if (id.equals(c.getString(0))) return new Created(created, c.getPosition() / PAGE * PAGE);
-        } catch (IOException | RuntimeException ignored) { /* The file was created. */ }
-        return new Created(created, -1);
+        try { index.created(tree,parent,created,info(resolver,created)); }
+        catch (IOException | RuntimeException problemIndexing) {
+            index.invalidateParent(tree,parent);
+            android.util.Log.w("Slate", "Could not index the new file",problemIndexing);
+        }
+        return new Created(created);
     }
 
     record Deletion(Uri uri, String name, String mime, EditorFile.Revision revision) {}
@@ -154,17 +209,44 @@ final class Workspace {
         } catch (SecurityException denied) { throw new IOException("Slate does not have permission to delete this file.", denied); }
     }
 
+    // Audio downloads can carry names such as "take.wav (2)" and a generic
+    // MIME type. Prefer the provider's media type, then check the actual suffix.
+    private static final Set<String> BINARY = new HashSet<>(Arrays.asList("wav","wave","mp3","mp4","m4a","m4b","flac","aac","aif","aiff","ogg",
+        "opus","mid","midi","wma","amr","caf","au","webm","mov","mkv","avi","wmv","mpeg","m4v","jpg","jpeg","png",
+        "gif","webp","heic","ico","bmp","tiff","raw","pdf","zip","gz","tgz","bz2","xz","7z","rar","tar","apk","jar",
+        "exe","dll","so","class","dex","db","sqlite","sqlite3","woff","woff2","ttf","otf","doc","docx","xls","xlsx","ppt","pptx"));
+    static boolean textCandidate(String name, String mime) {
+        String lower = name.toLowerCase(Locale.ROOT);
+        if (mime != null && (mime.startsWith("audio/") || mime.startsWith("video/")
+            || mime.startsWith("image/") && !mime.equals("image/svg+xml") || mime.startsWith("font/")
+            || mime.equals("application/pdf") || mime.equals("application/zip"))) return false;
+        int end = lower.length();
+        while (end > 3 && lower.charAt(end - 1) == ')') {
+            int i = end - 2;
+            while (i >= 0 && Character.isDigit(lower.charAt(i))) i--;
+            if (i == end - 2 || i < 1 || lower.charAt(i) != '(' || lower.charAt(i-1) != ' ') break;
+            end = i-1;
+        }
+        int dot = lower.lastIndexOf('.', end-1);
+        return dot < 0 || !BINARY.contains(lower.substring(dot+1, end));
+    }
+
     static Results find(ContentResolver resolver, List<Scope> folders, List<Entry> files, String term,
-                        boolean contents, CancellationSignal cancel) {
-        Scan scan = new Scan(resolver, term, contents, cancel);
+                        boolean contents, CancellationSignal cancel, java.util.function.Consumer<List<Entry>> progress) {
+        Scan scan = new Scan(resolver, term, contents, cancel, progress);
         for (Scope scope : folders) {
             if (scan.hits.size() >= LIMIT) break;
-            scan.walk(scope.workspace, scope.workspace.root, folders.size() > 1 ? scope.name + "/" : "");
+            try {
+                scope.workspace.index.checkAccess(scope.workspace.tree);
+                scan.walk(scope.workspace, scope.workspace.root, folders.size() > 1 ? scope.name + "/" : "");
+            } catch (SecurityException e) { scan.skipped++; }
         }
         for (Entry file : files) {
             if (scan.hits.size() >= LIMIT) break;
             cancel.throwIfCanceled();
-            scan.match(file);
+            try {
+                if (!contents || textCandidate(file.name, resolver.getType(file.uri))) scan.match(file);
+            } catch (SecurityException denied) { scan.skipped++; }
         }
         return new Results(scan.hits, scan.skipped);
     }
@@ -182,8 +264,11 @@ final class Workspace {
         record Match(String authority, String document, long offset) {}
         final Set<Match> found = new HashSet<>();
         int skipped;
+        final java.util.function.Consumer<List<Entry>> progress;
+        long lastUpdate;
 
-        Scan(ContentResolver resolver, String query, boolean contents, CancellationSignal cancel) {
+        Scan(ContentResolver resolver, String query, boolean contents, CancellationSignal cancel, java.util.function.Consumer<List<Entry>> progress) {
+            this.progress = progress;
             this.resolver = resolver;
             this.query = query.toLowerCase(Locale.ROOT);
             term = query.getBytes(UTF_8);
@@ -198,16 +283,22 @@ final class Workspace {
 
         void walk(Workspace ws, Uri dir, String prefix) {
             if (ancestors.size() >= 128 || !ancestors.add(dir)) { skipped++; return; }
-            try (Cursor cursor = ws.children(dir, cancel)) {
-                while (hits.size() < LIMIT && cursor.moveToNext()) {
-                    cancel.throwIfCanceled();
-                    Entry e = ws.entry(cursor, prefix);
-                    if (e.directory) walk(ws, e.uri, e.path + "/");
-                    else match(e);
-                }
+            String folder = prefix.toLowerCase(Locale.ROOT);
+            String needle = query.indexOf('/') >= 0 || folder.contains(query) ? "" : query;
+            try {
+                ws.index.visit(ws, dir, contents ? 2 : 3, needle, cancel, row -> {
+                    match(ws.entry(row,prefix));
+                    return hits.size() < LIMIT;
+                });
+                if (hits.size() < LIMIT) ws.index.visit(ws, dir, 1, "", cancel, row -> {
+                    Entry e = ws.entry(row, prefix);
+                    walk(ws, e.uri, e.path + "/");
+                    return hits.size() < LIMIT;
+                });
             } catch (IOException | SecurityException e) {
                 skipped++;
             } finally {
+                if (cancel.isCanceled()) ws.index.cancelSearch();
                 ancestors.remove(dir);
             }
         }
@@ -221,16 +312,26 @@ final class Workspace {
             List<String> path = hit.uri.getPathSegments();
             int index = path.indexOf("document");
             String id = index >= 0 && index + 1 < path.size() ? path.get(index + 1) : hit.uri.toString();
-            if (found.add(new Match(hit.uri.getAuthority(), id, hit.offset))) hits.add(hit);
+            if (found.add(new Match(hit.uri.getAuthority(), id, hit.offset))) {
+                hits.add(hit);
+                long now = android.os.SystemClock.uptimeMillis();
+                if (progress != null && (hits.size() == 1 || now - lastUpdate >= 150)) {
+                    progress.accept(new ArrayList<>(hits));
+                    lastUpdate = now;
+                }
+            }
         }
 
         void scanFile(Entry e) {
-            try (InputStream input = resolver.openInputStream(e.uri)) {
-                if (input == null) { skipped++; return; }
+            try (android.os.ParcelFileDescriptor fd = resolver.openFileDescriptor(e.uri, "r", cancel)) {
+                if (fd == null) { skipped++; return; }
+                try (InputStream input = new android.os.ParcelFileDescriptor.AutoCloseInputStream(fd)) {
+                cancel.setOnCancelListener(() -> { try { input.close(); } catch (IOException ignored) {} });
                 long offset = 0;
                 int n, matched = 0;
                 while (hits.size() < LIMIT && (n = input.read(block)) >= 0) {
                     cancel.throwIfCanceled();
+                    if (offset == 0) for (int i = 0; i < n; i++) if (block[i] == 0) return;
                     for (int i = 0; i < n; i++) {
                         while (matched > 0 && block[i] != term[matched]) matched = failure[matched - 1];
                         if (block[i] == term[matched] && ++matched == term.length) {
@@ -241,6 +342,7 @@ final class Workspace {
                     }
                     offset += n;
                 }
+                } finally { cancel.setOnCancelListener(null); }
             } catch (IOException | SecurityException ex) {
                 skipped++;
             }

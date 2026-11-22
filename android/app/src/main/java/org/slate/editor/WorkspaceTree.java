@@ -17,6 +17,7 @@ import java.util.concurrent.*;
 
 final class WorkspaceTree implements AutoCloseable {
     private final MainActivity ui;
+    private final DirectoryIndex.Listener indexUpdates;
     private final Appearance theme;
     private final SharedPreferences prefs;
     private final ExecutorService workers = Executors.newFixedThreadPool(2);
@@ -26,6 +27,7 @@ final class WorkspaceTree implements AutoCloseable {
     private final LinearLayout pane;
     private final ListView list;
     private final TextView title, empty;
+    private final Button location;
     private final Button openFolder, openFile, newFile, refresh;
     private final SidebarSearch search;
     private int treeScroll, treeTop;
@@ -85,12 +87,32 @@ final class WorkspaceTree implements AutoCloseable {
         newFile = action(actions, "New file", this::newFile);
         pane.addView(actions);
         search = new SidebarSearch(ui, this, theme);
+        indexUpdates = (tree, parent, success) -> ui.runOnUiThread(() -> {
+            if (closed) return;
+            if (!success) { ui.toast("Couldn’t refresh folder. Showing cached files."); return; }
+            for (Row row : new ArrayList<>(rows)) {
+                Node n = row.node;
+                if (row.kind != Kind.ITEM || !n.folder || !n.expanded || !n.workspace.tree.equals(tree)
+                    || !DocumentsContract.getDocumentId(n.uri).equals(parent)) continue;
+                if (n.request != null) n.request.cancel();
+                n.request = null;
+                if (visible) load(n); else release(n);
+            }
+            if (search.active()) search.restart();
+        });
+        DirectoryIndex.get(ui).listeners.add(indexUpdates);
         pane.addView(search.controls);
         pane.addView(search.summary);
         empty = new TextView(ui);
         empty.setText("Open a folder to browse its files here.");
         empty.setPadding(ui.dp(16), ui.dp(12), ui.dp(16), ui.dp(12));
         pane.addView(empty);
+        location = new Button(ui, null, android.R.attr.borderlessButtonStyle);
+        location.setSingleLine(true);
+        location.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        location.setAllCaps(false);
+        location.setVisibility(View.GONE);
+        pane.addView(location, -1, ui.dp(40));
         list = new ListView(ui);
         list.setContentDescription("Workspace files");
         list.setDivider(null);
@@ -99,6 +121,10 @@ final class WorkspaceTree implements AutoCloseable {
             if (search.active()) search.open(i); else click(rows.get(i));
         });
         pane.addView(list, new LinearLayout.LayoutParams(-1, 0, 1));
+        list.setOnScrollListener(new AbsListView.OnScrollListener() {
+            @Override public void onScrollStateChanged(AbsListView view, int state) {}
+            @Override public void onScroll(AbsListView view, int first, int count, int total) { updateLocation(first); }
+        });
         paint();
         readGrants(false);
     }
@@ -137,6 +163,7 @@ final class WorkspaceTree implements AutoCloseable {
 
     void displaySearch(boolean active) {
         empty.setVisibility(!active && rows.isEmpty() ? View.VISIBLE : View.GONE);
+        updateLocation(active ? -1 : treeScroll);
         if (active && list.getAdapter() != search.adapter) {
             treeScroll = list.getFirstVisiblePosition();
             treeTop = list.getChildCount() == 0 ? 0 : list.getChildAt(0).getTop();
@@ -159,7 +186,7 @@ final class WorkspaceTree implements AutoCloseable {
         return DocumentsContract.isTreeUri(grant) && grant.getPathSegments().size() == 2;
     }
 
-    private void readGrants(boolean refreshRows) {
+    void readGrants(boolean refreshRows) {
         int generation = ++grantGeneration;
         workers.execute(() -> {
             List<UriPermission> permissions = ui.getContentResolver().getPersistedUriPermissions();
@@ -185,6 +212,7 @@ final class WorkspaceTree implements AutoCloseable {
                 rebuild();
                 if (search.active()) search.restart();
             });
+            DirectoryIndex.get(ui).pruneRevoked();
         });
     }
 
@@ -201,7 +229,7 @@ final class WorkspaceTree implements AutoCloseable {
             if (name != null) { known.name = name; known.named = true; }
             return known;
         }
-        Workspace ws = folder ? new Workspace(ui.getContentResolver(), grant) : null;
+        Workspace ws = folder ? new Workspace(ui, grant) : null;
         Uri document = folder ? ws.root : grant;
         String cached = prefs.getString("label/" + grant, null);
         Node n = node(null, ws, document, name != null ? name : cached != null ? cached : fallbackName(grant, folder), folder);
@@ -310,20 +338,115 @@ final class WorkspaceTree implements AutoCloseable {
         PopupMenu menu = new PopupMenu(ui, anchor);
         if (target.folder) menu.getMenu().add("New file here…")
             .setOnMenuItemClickListener(item -> { askName(target); return true; });
-        else menu.getMenu().add("Delete file…")
+        else {
+            menu.getMenu().add("Show in folder…").setOnMenuItemClickListener(item -> { showFolder(target.uri); return true; });
+            menu.getMenu().add("Delete file…")
             .setOnMenuItemClickListener(item -> { ui.deleteFile(target.uri, target.name); return true; });
+        }
         menu.show();
     }
 
-    void created(Uri parent, int pageStart) {
-        for (Row r : rows) if (r.kind == Kind.ITEM && r.node.folder && sameDocument(r.node.uri, parent)) {
-            r.node.expanded = true;
-            if (pageStart >= 0) r.node.skip = pageStart;
-            savePosition(r.node);
-            release(r.node);
+    void created(Uri parent, Uri file) {
+        for (Row r : new ArrayList<>(rows)) if (r.kind == Kind.ITEM && r.node.folder && sameDocument(r.node.uri, parent)) {
+            Node n = r.node;
+            n.expanded = true;
+            savePosition(n);
+            release(n);
+            position(n, DocumentsContract.getDocumentId(file), null);
         }
         if (search.active()) search.input.setText("");
         rebuild();
+    }
+
+    private void updateLocation(int first) {
+        if (location == null || first < 0 || first >= rows.size() || search.active()) {
+            if (location != null) location.setVisibility(View.GONE);
+            return;
+        }
+        Row row = rows.get(first);
+        Node folder = row.kind == Kind.ITEM && row.node != null ? row.node.parent : row.node;
+        if (folder == null || !folder.folder) { location.setVisibility(View.GONE); return; }
+        location.setText("↑ " + location(folder));
+        location.setTextColor(theme.accent());
+        location.setContentDescription("Return to folder " + folder.name);
+        location.setVisibility(View.VISIBLE);
+        location.setOnClickListener(v -> scrollTo(folder));
+    }
+
+    private void scrollTo(Node node) {
+        for (int i = 0; i < rows.size(); i++) if (rows.get(i).kind == Kind.ITEM && rows.get(i).node == node) {
+            list.setSelection(i); return;
+        }
+    }
+
+    private CancellationSignal locating;
+    private record Found(Node root,List<String> path) {}
+
+    void showFolder(Uri file) { showFolder(file,true); }
+    void showFolder(Uri file, boolean chooseIfMissing) {
+        ui.showFiles();
+        search.input.setText("");
+        if (locating != null) locating.cancel();
+        CancellationSignal request = new CancellationSignal();
+        locating = request;
+        ArrayList<Node> roots = new ArrayList<>();
+        for (Node n : grants.values()) if (n.folder && Objects.equals(n.uri.getAuthority(),file.getAuthority())) roots.add(n);
+        workers.execute(() -> {
+            Found best = null;
+            for (Node root : roots) {
+                if (request.isCanceled()) return;
+                List<String> path = Workspace.externalPath(root.workspace.tree,file);
+                if (path.isEmpty()) {
+                    try {
+                        Uri scoped = DocumentsContract.buildDocumentUriUsingTree(root.workspace.tree,DocumentsContract.getDocumentId(file));
+                        DocumentsContract.Path found = DocumentsContract.findDocumentPath(ui.getContentResolver(),scoped);
+                        if (found != null && found.getPath().get(0).equals(DocumentsContract.getTreeDocumentId(root.workspace.tree)))
+                            path = found.getPath();
+                    } catch (Exception unsupported) { /* Only grants containing this file can reveal its ancestors. */ }
+                }
+                if (path.size() >= 2 && (best == null || path.size() < best.path.size())) best = new Found(root,path);
+            }
+            Found match = best;
+            Uri hint = match == null && chooseIfMissing ? Workspace.parentHint(ui.getContentResolver(),file) : null;
+            ui.runOnUiThread(() -> {
+                if (closed || request.isCanceled()) return;
+                if (match == null) { if (chooseIfMissing) ui.pickLocation(file,hint); return; }
+                reveal(match.root,match.path,1);
+            });
+        });
+    }
+
+    private void reveal(Node n,List<String> path,int depth) {
+        if (depth >= path.size()) { scrollTo(n); return; }
+        n.expanded = true;
+        savePosition(n);
+        rebuild();
+        scrollTo(n);
+        position(n,path.get(depth),child -> reveal(child,path,depth+1));
+    }
+
+    private void position(Node parent,String id,java.util.function.Consumer<Node> next) {
+        if (parent.request != null) parent.request.cancel();
+        CancellationSignal request = new CancellationSignal();
+        parent.request = request;
+        CancellationSignal revealRequest = locating;
+        workers.execute(() -> {
+            try {
+                parent.workspace.index.checkAccess(parent.workspace.tree);
+                int pos = parent.workspace.index.position(parent.workspace,parent.uri,id,request);
+                int skip = pos < 0 ? 0 : pos / Workspace.PAGE * Workspace.PAGE;
+                Workspace.Listing page = parent.workspace.list(parent.uri,skip,request);
+                ui.runOnUiThread(() -> {
+                    if (closed || parent.request != request || next != null && revealRequest != locating) return;
+                    parent.skip = skip;
+                    savePosition(parent);
+                    applyPage(parent,page);
+                    if (next != null) for (Node child : parent.children) if (DocumentsContract.getDocumentId(child.uri).equals(id)) {
+                        next.accept(child); return;
+                    }
+                });
+            } catch (Exception e) { fail(parent,request); }
+        });
     }
 
     void deleted(Uri target) {
@@ -379,12 +502,25 @@ final class WorkspaceTree implements AutoCloseable {
     }
 
     private void refresh() {
-        for (Node root : grants.values()) {
-            release(root);
-            root.named = false;
-        }
-        rebuild();
-        readGrants(true);
+        for (Node root : grants.values()) root.named = false;
+        if (search.active()) search.visible(false);
+        workers.execute(() -> {
+            DirectoryIndex.get(ui).refresh();
+            ui.runOnUiThread(() -> {
+                if (closed) return;
+                for (Row r : new ArrayList<>(rows)) {
+                    if (r.kind != Kind.ITEM || !r.node.folder || !r.node.expanded) continue;
+                    Node n = r.node;
+                    if (n.request != null) n.request.cancel();
+                    n.request = null;
+                    n.failed = false;
+                    if (n.children != null) load(n);
+                }
+                rebuild();
+                readGrants(true);
+                search.visible(visible);
+            });
+        });
     }
 
     private void click(Row row) {
@@ -422,23 +558,36 @@ final class WorkspaceTree implements AutoCloseable {
                 Workspace.Listing page = parent.workspace.list(parent.uri, skip, request);
                 ui.runOnUiThread(() -> {
                     if (closed || parent.request != request) return;
-                    parent.request = null;
-                    parent.children = new ArrayList<>(page.entries().size());
-                    for (Workspace.Entry e : page.entries()) {
-                        if (e.directory() && ancestor(parent, e.uri())) continue;
-                        parent.children.add(node(parent, parent.workspace, e.uri(), e.name(), e.directory()));
-                    }
-                    parent.more = page.more();
-                    rebuild();
+                    applyPage(parent,page);
                 });
-            } catch (Exception e) {
-                ui.runOnUiThread(() -> {
-                    if (closed || parent.request != request) return;
-                    parent.request = null;
-                    parent.failed = true;
-                    rebuild();
-                });
+            } catch (Exception e) { fail(parent,request); }
+        });
+    }
+
+    private void applyPage(Node parent, Workspace.Listing page) {
+        parent.request = null;
+        // A refresh may shrink a directory so the previous page no longer exists.
+        if (parent.skip > 0 && page.entries().isEmpty()) {
+            parent.skip = 0;
+            savePosition(parent);
+            parent.children = null;
+        } else {
+            parent.children = new ArrayList<>(page.entries().size());
+            for (Workspace.Entry e : page.entries()) {
+                if (e.directory() && ancestor(parent, e.uri())) continue;
+                parent.children.add(node(parent, parent.workspace, e.uri(), e.name(), e.directory()));
             }
+            parent.more = page.more();
+        }
+        rebuild();
+    }
+
+    private void fail(Node parent, CancellationSignal request) {
+        ui.runOnUiThread(() -> {
+            if (closed || parent.request != request) return;
+            parent.request = null;
+            parent.failed = true;
+            rebuild();
         });
     }
 
@@ -550,6 +699,7 @@ final class WorkspaceTree implements AutoCloseable {
 
     @Override public void close() {
         closed = true;
+        DirectoryIndex.get(ui).listeners.remove(indexUpdates);
         search.close();
         for (Node root : grants.values()) release(root);
         workers.shutdownNow();
