@@ -111,6 +111,18 @@ final class EditorFile implements AutoCloseable {
         name = opened.name;
         uri = destination;
         dirty = false;
+        // Regular providers can become the backing again, releasing staging disk
+        // space immediately. A pipe or unavailable read handle keeps the stage.
+        try (ParcelFileDescriptor fd = resolver.openFileDescriptor(uri, "r")) {
+            if (fd != null && fd.getStatSize() == document.size()
+                    && OsConstants.S_ISREG(Os.fstat(fd.getFileDescriptor()).st_mode)) {
+                document.open(fd.getFd());
+                backing.delete();
+                backing = null;
+            }
+        } catch (IOException | SecurityException | IllegalStateException | android.system.ErrnoException ignored) {
+            // The complete staged model remains usable after the successful write.
+        }
     }
 
     private static void transfer(InputStream input, OutputStream output) throws IOException {

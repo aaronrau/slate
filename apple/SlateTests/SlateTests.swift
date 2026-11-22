@@ -63,6 +63,67 @@ final class SlateTests: XCTestCase {
     }
 
     @MainActor
+    private func waitUntil(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
+        for _ in 0..<250 {
+            if condition() { return }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTFail("Timed out waiting for editor operation", file: file, line: line)
+    }
+
+    @MainActor
+    func testEditingSavingOpeningAndSearchingInWorkspace() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let first = dir.appendingPathComponent("notes.md")
+        let second = dir.appendingPathComponent("log.txt")
+        try Data("# Notes".utf8).write(to: first)
+        try Data("Second file".utf8).write(to: second)
+
+        let model = EditorModel(history: NavigationHistory())
+        model.open(first)
+        try await waitUntil { !model.busy }
+        XCTAssertTrue(model.preview)
+        model.preview = false
+        let replacement = "# Notes\n🍏 needle"
+        model.edit(replacement, caret: NSRange(location: 0, length: 0), composing: false)
+        model.open(second)
+        XCTAssertTrue(model.confirmDiscard)
+        model.cancelDiscard()
+        XCTAssertEqual(model.file?.url, first)
+        XCTAssertTrue(model.dirty)
+        model.save()
+        try await waitUntil { !model.busy }
+        XCTAssertNil(model.errorMessage)
+        XCTAssertFalse(model.dirty)
+        XCTAssertEqual(try String(contentsOf: first, encoding: .utf8), replacement)
+
+        let workspace = WorkspaceModel()
+        workspace.open(folder: dir)
+        try await waitUntil { !workspace.busy }
+        XCTAssertEqual(Set(workspace.rows.map { $0.url.lastPathComponent }), ["notes.md", "log.txt"])
+        workspace.contents = true
+        workspace.query = "needle"
+        try await waitUntil { !workspace.busy }
+        let hit = try XCTUnwrap(workspace.rows.first)
+        XCTAssertEqual(hit.offset, UInt64("# Notes\n🍏 ".utf8.count))
+        model.open(second)
+        model.openExternal(first)
+        try await waitUntil { !model.busy }
+        model.resumePendingOpen()
+        try await waitUntil { !model.busy }
+        XCTAssertEqual(model.file?.url, first)
+        model.open(hit.url, workspace: workspace.root, offset: hit.offset, length: hit.matchLength)
+        XCTAssertFalse(model.preview)
+        XCTAssertEqual((model.page.text as NSString).substring(with: model.selection), "needle")
+        let visit = try XCTUnwrap(model.history.back)
+        model.navigate(visit: visit)
+        try await waitUntil { !model.busy }
+        XCTAssertEqual(model.file?.url.standardizedFileURL, second.standardizedFileURL)
+    }
+
+    @MainActor
     func testBundledOfflinePreviewRendersTableAndDiagram() async throws {
         let controller = PreviewController()
         let web = controller.makeView()

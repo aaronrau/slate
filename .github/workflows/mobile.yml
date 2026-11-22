@@ -26,7 +26,7 @@ jobs:
             -destination 'generic/platform=macOS' -derivedDataPath "$RUNNER_TEMP/build" \
             'ARCHS=arm64 x86_64' ONLY_ACTIVE_ARCH=NO CODE_SIGN_IDENTITY=-
           app="$RUNNER_TEMP/build/Build/Products/Release/Slate.app"
-          lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/Slate"
+          lipo "$app/Contents/MacOS/Slate" -verify_arch arm64 x86_64
           "$app/Contents/MacOS/Slate" &
           pid=$!
           sleep 3

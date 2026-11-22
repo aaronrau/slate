@@ -13,7 +13,7 @@ final class EditorModel: ObservableObject {
     @Published var needsSaveAs = false
     @Published var exportFile: ExportFile?
     @Published private(set) var pageRevision = 0
-    let history = NavigationHistory(store: .applicationStore())
+    let history: NavigationHistory
     private var attemptedRestore = false
     private var pendingOpen: ScopedURL?
     private var document = Document()
@@ -24,12 +24,21 @@ final class EditorModel: ObservableObject {
     var markdown: Bool { ["md", "markdown", "mdown", "mkd"].contains(file?.url.pathExtension.lowercased() ?? "") }
     var hasPages: Bool { page.start > 0 || page.end < size }
 
+    init(history: NavigationHistory = NavigationHistory(store: .applicationStore())) {
+        self.history = history
+    }
+
     func protectChanges(_ action: @escaping () -> Void) {
         guard !busy else { return }
         if dirty {
             discardAction = action
             confirmDiscard = true
         } else { action() }
+    }
+
+    func cancelDiscard() {
+        discardAction = nil
+        confirmDiscard = false
     }
 
     func discard() {

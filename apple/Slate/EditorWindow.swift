@@ -44,7 +44,7 @@ struct EditorWindow: View {
         }
         .onChange(of: workspace.root?.url) { _ in sidebar = true; compactBrowser = true }
         .alert("Unsaved changes to \(model.title)", isPresented: $model.confirmDiscard) {
-            Button("Keep Editing", role: .cancel) {}
+            Button("Keep Editing", role: .cancel) { model.cancelDiscard() }
             Button("Discard Changes", role: .destructive) { model.discard() }
         }
         .alert("Slate", isPresented: Binding(get: { model.errorMessage != nil },

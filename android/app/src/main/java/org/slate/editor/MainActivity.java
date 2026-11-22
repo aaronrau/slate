@@ -12,8 +12,6 @@ import android.view.*;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.*;
 
-import java.nio.*;
-import java.nio.charset.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
@@ -32,7 +30,7 @@ public final class MainActivity extends Activity {
     private Runnable afterCreate;
     private boolean busy, previewing, loading, readable, wholeSelection;
     private long start, end;
-    private String pageText = "";
+    private String pageText = "", operation = "";
     private long currentTab;
     private LinearLayout root, toolbar, tabBar, footer;
     private FrameLayout body;
@@ -249,7 +247,7 @@ public final class MainActivity extends Activity {
     private void followHistory(Navigation.Place place, int direction) {
         leave(() -> {
             remember();
-            runIO(() -> {
+            runIO("Opening file…", () -> {
                 Navigation.Place target = place;
                 while (target != null && !isDestroyed()) {
                     try {
@@ -274,6 +272,11 @@ public final class MainActivity extends Activity {
         editor.setBackgroundColor(theme.background());
         editor.setTextColor(theme.text());
         editor.setHintTextColor(theme.muted());
+        if (Build.VERSION.SDK_INT >= 29 && editor.getTextCursorDrawable() != null) {
+            android.graphics.drawable.Drawable cursor = editor.getTextCursorDrawable().mutate();
+            cursor.setTint(theme.accent());
+            editor.setTextCursorDrawable(cursor);
+        }
         editor.setHighlightColor((theme.accent() & 0x00ffffff) | 0x66000000);
         status.setTextColor(theme.muted());
         brand.setTextColor(theme.text());
@@ -343,9 +346,11 @@ public final class MainActivity extends Activity {
                 int selectionEnd = (int)Math.min(bytes.length, (long)cursorBytes + selectedBytes);
                 int a = new String(bytes, 0, cursorBytes, UTF_8).length();
                 int b = new String(bytes, 0, selectionEnd, UTF_8).length();
+                editor.setFocusableInTouchMode(readable);
+                editor.setEnabled(!busy && readable);
+                if (selectedBytes > 0 && readable) editor.requestFocus();
                 editor.setSelection(Math.min(a, text.length()), Math.min(b, text.length()));
                 editor.scrollTo(0, 0);
-                editor.setFocusableInTouchMode(readable);
                 editor.setCursorVisible(readable);
             }
         } catch (Exception e) {
@@ -368,7 +373,7 @@ public final class MainActivity extends Activity {
     private void refresh() {
         long size = file.document.size();
         boolean pages = start != 0 || end < size;
-        status.setText((file.dirty ? "• " : "") + (currentTab == 0 || !pages ? file.name + "  ·  " : "")
+        status.setText(busy ? operation : (file.dirty ? "• " : "") + (currentTab == 0 || !pages ? file.name + "  ·  " : "")
             + (wholeSelection ? "All bytes selected" : pages ? start + "–" + end + " of " + size : size + " bytes")
             + (!readable ? "  ·  Invalid UTF-8 (read only)" : ""));
         mode.setVisibility(markdown() ? View.VISIBLE : View.GONE);
@@ -530,7 +535,12 @@ public final class MainActivity extends Activity {
     void pickFolder() { startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), FOLDER); }
 
     private void persist(Uri uri, Intent data) {
-        int flags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        int granted = data.getFlags();
+        if ((granted & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) == 0 ||
+            (granted & Intent.FLAG_GRANT_READ_URI_PERMISSION) == 0) return;
+        int flags = (granted & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == 0
+            ? Intent.FLAG_GRANT_READ_URI_PERMISSION
+            : Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
         try { getContentResolver().takePersistableUriPermission(uri, flags); }
         catch (SecurityException ignored) { /* Some Open With providers grant only session access. */ }
     }
@@ -570,7 +580,7 @@ public final class MainActivity extends Activity {
         }
         leave(() -> {
             remember();
-            runIO(() -> EditorFile.open(this, target), opened -> {
+            runIO("Opening file…", () -> EditorFile.open(this, target), opened -> {
                 install(opened, offset, select, place);
             });
         });
@@ -599,7 +609,7 @@ public final class MainActivity extends Activity {
     private void write(Uri destination, Runnable after) {
         remember();
         long position = caret();
-        runIO(() -> { file.save(this, destination); return true; }, ignored -> {
+        runIO("Saving file…", () -> { file.save(this, destination); return true; }, ignored -> {
             navigation.visit(destination, file.name, position, previewing);
             updateTabs();
             refresh();
@@ -608,7 +618,8 @@ public final class MainActivity extends Activity {
         });
     }
 
-    private <T> void runIO(Callable<T> work, Consumer<T> done) {
+    private <T> void runIO(String operation, Callable<T> work, Consumer<T> done) {
+        this.operation = operation;
         busy = true;
         refresh();
         back.setEnabled(false); forward.setEnabled(false);
