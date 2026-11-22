@@ -1,5 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application android:label="Slate" android:icon="@drawable/slate_icon"
+    <application android:label="Slate" android:icon="@mipmap/ic_launcher"
         android:theme="@android:style/Theme.Material.NoActionBar" android:allowBackup="false"
         android:usesCleartextTraffic="false">
         <activity android:name=".MainActivity" android:exported="true"

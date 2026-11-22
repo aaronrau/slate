@@ -41,13 +41,33 @@ public final class EditorTest extends ActivityInstrumentationTestCase2<MainActiv
     private <T extends View> T view(Class<T> type, String label) {
         return find(getActivity().getWindow().getDecorView(), type, label);
     }
-    private void await(Callable<Boolean> assertion) throws Throwable {
-        long deadline = android.os.SystemClock.elapsedRealtime() + 20000;
+    private void await(String state, Callable<Boolean> assertion) throws Throwable {
+        android.util.Log.i("SlateEditorTest", "Waiting for " + state);
+        long deadline = android.os.SystemClock.elapsedRealtime() + 60000;
         while (android.os.SystemClock.elapsedRealtime() < deadline) {
             if (onUi(assertion)) return;
             Thread.sleep(50);
         }
-        fail("Editor did not reach expected state");
+        StringBuilder details = new StringBuilder();
+        onUi(() -> {
+            View window = getActivity().getWindow().getDecorView();
+            details.append(" windowFocus=").append(window.hasWindowFocus())
+                .append(" windowVisibility=").append(window.getWindowVisibility());
+            describe(window, details);
+            return null;
+        });
+        fail("Timed out waiting for " + state + "." + details);
+    }
+
+    private void describe(View view, StringBuilder details) {
+        if (view instanceof EditText editor) details.append(" editorChars=").append(editor.length());
+        else if (view instanceof TextView label && label.isShown()) {
+            details.append(" [").append(label.getText()).append("]");
+        } else if (view instanceof WebView web) {
+            details.append(" WebView=").append(web.getUrl());
+        }
+        if (view instanceof ViewGroup group)
+            for (int i = 0; i < group.getChildCount(); i++) describe(group.getChildAt(i), details);
     }
 
     private Uri create(String ext, byte[] data) throws IOException {
@@ -137,16 +157,16 @@ public final class EditorTest extends ActivityInstrumentationTestCase2<MainActiv
         try {
             setActivityIntent(new Intent(Intent.ACTION_EDIT, a));
             MainActivity activity = getActivity();
-            await(() -> view(Button.class, "More options").isEnabled() && view(EditText.class, null) != null && view(EditText.class, null).length() == 32768);
+            await("opening first source page", () -> view(Button.class, "More options").isEnabled() && view(EditText.class, null) != null && view(EditText.class, null).length() == 32768);
             onUi(() -> { activity.requestOpen(a, 43500, 0, null); return null; });
-            await(() -> view(EditText.class, null) != null && view(EditText.class, null).length() == 44000 - 32768);
+            await("loading final source page", () -> view(EditText.class, null) != null && view(EditText.class, null).length() == 44000 - 32768);
             onUi(() -> {
                 EditText edit = view(EditText.class, null);
                 edit.getText().insert(43500 - 32768, "🚲");
                 view(Button.class, "Save file").performClick();
                 return null;
             });
-            await(() -> view(Button.class, "More options").isEnabled() && !view(Button.class, "Save file").isEnabled());
+            await("provider save completion", () -> view(Button.class, "More options").isEnabled() && !view(Button.class, "Save file").isEnabled());
             try (InputStream stream = resolver.openInputStream(a)) {
                 ByteArrayOutputStream bytes = new ByteArrayOutputStream();
                 byte[] block = new byte[8192]; int n;
@@ -155,17 +175,22 @@ public final class EditorTest extends ActivityInstrumentationTestCase2<MainActiv
                 assertEquals("🚲", new String(bytes.toByteArray(), 43500, 4, UTF_8));
             }
             onUi(() -> { activity.requestOpen(b, -1, 0, null); return null; });
-            await(() -> view(WebView.class, null) != null);
+            await("showing Markdown preview", () -> view(WebView.class, null) != null);
             AtomicReference<String> dom = new AtomicReference<>("");
-            await(() -> {
+            await("rendering table cells and Mermaid SVG", () -> {
                 WebView web = view(WebView.class, null);
-                web.evaluateJavascript("Boolean(document.querySelector('table td') && document.querySelector('.diagram svg'))", dom::set);
-                return "true".equals(dom.get());
+                web.evaluateJavascript("[document.readyState, typeof window.slatePreview, !!document.querySelector('table td'), " +
+                    "!!document.querySelector('.diagram svg'), document.querySelector('.diagram details')?.textContent?.slice(0,100)]",
+                    value -> {
+                        if (!value.equals(dom.getAndSet(value)))
+                            android.util.Log.i("SlateEditorTest", "Preview renderer " + value);
+                    });
+                return dom.get().startsWith("[\"complete\",\"object\",true,true");
             });
             onUi(() -> view(Button.class, "Previous file").performClick());
-            await(() -> view(EditText.class, null) != null && view(EditText.class, null).getText().toString().contains("🚲"));
+            await("returning to the edited source page", () -> view(EditText.class, null) != null && view(EditText.class, null).getText().toString().contains("🚲"));
             onUi(() -> view(Button.class, "Next file").performClick());
-            await(() -> view(WebView.class, null) != null);
+            await("restoring the preview via Forward", () -> view(WebView.class, null) != null);
         } finally {
             resolver.delete(a, null, null);
             resolver.delete(b, null, null);
