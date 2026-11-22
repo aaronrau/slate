@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Slate
+GenericName=Text Editor
+Comment=Edit large files and read Markdown
+Exec=slate %f
+Icon=accessories-text-editor
+Terminal=false
+Categories=Utility;TextEditor;
+MimeType=text/plain;text/markdown;
