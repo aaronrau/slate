@@ -26,16 +26,20 @@ public final class MainActivity extends Activity {
     private EditorFile file;
     private Appearance theme;
     private Navigation navigation;
-    private WorkspaceBrowser workspace;
+    private WorkspaceTree workspace;
     private Runnable afterCreate;
     private boolean busy, previewing, loading, readable, wholeSelection;
     private long start, end;
     private String pageText = "", operation = "";
     private long currentTab;
     private LinearLayout root, toolbar, tabBar, footer;
-    private FrameLayout body;
+    private FrameLayout body, workspaceFrame;
+    private LinearLayout documentColumn;
+    private View drawerScrim;
+    private boolean wide, drawerOpen;
+    private ImageButton files;
     private Gallery tabs;
-    private Button back, forward, mode, save, files, more, previous, next;
+    private Button back, forward, mode, save, more, previous, next;
     private TextView brand, status;
     private SourceEditor editor;
     private PreviewPane preview;
@@ -53,7 +57,8 @@ public final class MainActivity extends Activity {
         setTheme(theme.dark ? android.R.style.Theme_Material_NoActionBar : android.R.style.Theme_Material_Light_NoActionBar);
         file = new EditorFile();
         navigation = new Navigation(this);
-        workspace = new WorkspaceBrowser(this);
+        workspace = new WorkspaceTree(this, theme);
+        drawerOpen = state != null && state.getBoolean("filesDrawer");
         build();
         paint();
         showPage(0, 0);
@@ -104,6 +109,11 @@ public final class MainActivity extends Activity {
         toolbar = row();
         toolbar.setPadding(dp(8), 0, 0, 0);
         root.addView(toolbar);
+        files = new ImageButton(this, null, android.R.attr.borderlessButtonStyle);
+        files.setImageResource(R.drawable.menu_files);
+        files.setContentDescription("Files");
+        files.setOnClickListener(v -> setDrawerOpen(!drawerOpen));
+        toolbar.addView(files, dp(48), dp(48));
         ImageView icon = new ImageView(this);
         icon.setImageResource(R.drawable.slate_icon);
         toolbar.addView(icon, dp(30), dp(30));
@@ -114,16 +124,28 @@ public final class MainActivity extends Activity {
         brand.setPadding(dp(6), 0, 0, 0);
         brand.setSingleLine();
         toolbar.addView(brand, flex());
-        files = button(toolbar, "Files", "Browse files", () -> {
-            if (workspace.hasFolder()) workspace.browse(); else pickFile();
-        });
         mode = button(toolbar, "Preview", "Switch Markdown view", this::togglePreview);
         save = button(toolbar, "Save", "Save file", () -> save(false, null));
         more = button(toolbar, "⋮", "More options", this::menu);
         more.setTextSize(22);
 
+        workspaceFrame = new FrameLayout(this);
+        root.addView(workspaceFrame, new LinearLayout.LayoutParams(-1, 0, 1));
+        documentColumn = new LinearLayout(this);
+        documentColumn.setOrientation(LinearLayout.VERTICAL);
+        workspaceFrame.addView(documentColumn, -1, -1);
+        drawerScrim = new View(this);
+        drawerScrim.setBackgroundColor(0x70000000);
+        drawerScrim.setContentDescription("Close Files");
+        drawerScrim.setOnClickListener(v -> setDrawerOpen(false));
+        workspaceFrame.addView(drawerScrim, -1, -1);
+        workspaceFrame.addView(workspace.view(), new FrameLayout.LayoutParams(dp(280), -1, Gravity.START));
+        workspaceFrame.addOnLayoutChangeListener((v, l, t, r, b, oldL, oldT, oldR, oldB) -> {
+            if (r - l != oldR - oldL) layoutFiles(r - l);
+        });
+        layoutFiles(getResources().getDisplayMetrics().widthPixels);
         tabBar = row();
-        root.addView(tabBar);
+        documentColumn.addView(tabBar);
         back = button(tabBar, "‹", "Previous file", () -> travel(-1));
         back.setTextSize(24);
         tabs = new Gallery(this);
@@ -143,7 +165,7 @@ public final class MainActivity extends Activity {
         forward.setTextSize(24);
 
         body = new FrameLayout(this);
-        root.addView(body, new LinearLayout.LayoutParams(-1, 0, 1));
+        documentColumn.addView(body, new LinearLayout.LayoutParams(-1, 0, 1));
         editor = new SourceEditor();
         editor.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
             | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
@@ -178,7 +200,7 @@ public final class MainActivity extends Activity {
         body.addView(editor, -1, -1);
         footer = row();
         footer.setPadding(dp(6), 0, dp(6), 0);
-        root.addView(footer);
+        documentColumn.addView(footer);
         previous = button(footer, "‹", "Previous page", () -> showPage(Math.max(0, start - (previewing ? PREVIEW_PAGE : SOURCE_PAGE)), 0, true));
         status = new TextView(this);
         status.setTextSize(12);
@@ -197,6 +219,38 @@ public final class MainActivity extends Activity {
         });
         next = button(footer, "›", "Next page", () -> showPage(end, 0, true));
     }
+
+    private void layoutFiles(int width) {
+        wide = width >= dp(700);
+        int paneWidth = wide ? dp(280) : Math.max(1, Math.min(dp(320), width - dp(48)));
+        FrameLayout.LayoutParams pane = (FrameLayout.LayoutParams)workspace.view().getLayoutParams();
+        if (pane.width != paneWidth) {
+            pane.width = paneWidth;
+            workspace.view().setLayoutParams(pane);
+        }
+        FrameLayout.LayoutParams content = (FrameLayout.LayoutParams)documentColumn.getLayoutParams();
+        int margin = wide ? paneWidth : 0;
+        if (content.getMarginStart() != margin) {
+            content.setMarginStart(margin);
+            documentColumn.setLayoutParams(content);
+        }
+        boolean open = wide || drawerOpen;
+        workspace.view().setVisibility(open ? View.VISIBLE : View.GONE);
+        drawerScrim.setVisibility(drawerOpen && !wide ? View.VISIBLE : View.GONE);
+        documentColumn.setImportantForAccessibility(drawerOpen && !wide ? View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            : View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
+        files.setVisibility(wide ? View.GONE : View.VISIBLE);
+        workspace.visible(open);
+    }
+
+    private void setDrawerOpen(boolean open) {
+        if (open && editor != null)
+            ((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(editor.getWindowToken(), 0);
+        drawerOpen = open;
+        layoutFiles(workspaceFrame.getWidth() > 0 ? workspaceFrame.getWidth() : getResources().getDisplayMetrics().widthPixels);
+    }
+
+    void showFiles() { setDrawerOpen(true); }
 
     private final class TabAdapter extends BaseAdapter {
         private int count;
@@ -229,6 +283,7 @@ public final class MainActivity extends Activity {
 
     private void updateTabs() {
         Navigation.Place place = navigation.relative(0);
+        workspace.select(file.uri);
         currentTab = file.uri != null && place != null && file.uri.equals(place.uri()) ? place.tab() : 0;
         tabAdapter.refresh();
         if (currentTab > 0) tabs.setSelection((int)(currentTab - 1), false);
@@ -267,6 +322,8 @@ public final class MainActivity extends Activity {
     }
 
     private void paint() {
+        workspace.paint();
+        files.setColorFilter(theme.accent());
         root.setBackgroundColor(theme.surface());
         body.setBackgroundColor(theme.background());
         editor.setBackgroundColor(theme.background());
@@ -282,7 +339,7 @@ public final class MainActivity extends Activity {
         brand.setTextColor(theme.text());
         seek.setProgressTintList(ColorStateList.valueOf(theme.accent()));
         seek.setThumbTintList(ColorStateList.valueOf(theme.accent()));
-        for (Button b : new Button[]{back, forward, files, mode, save, more, previous, next}) {
+        for (Button b : new Button[]{back, forward, mode, save, more, previous, next}) {
             b.setTextColor(new ColorStateList(new int[][]{{-android.R.attr.state_enabled}, {}},
                 new int[]{(theme.muted() & 0xffffff) | 0x65000000, theme.accent()}));
         }
@@ -505,8 +562,8 @@ public final class MainActivity extends Activity {
         item(menu, "Open file…", true, this::pickFile);
         item(menu, "Open folder…", true, this::pickFolder);
         if (workspace.hasFolder()) {
-            item(menu, "Browse folder", true, workspace::browse);
-            item(menu, "Find in folder…", true, workspace::find);
+            item(menu, "Browse folder", true, this::showFiles);
+            item(menu, "Find in folder…", true, () -> { showFiles(); workspace.focusSearch(); });
         }
         item(menu, "Save as…", true, () -> save(true, null));
         item(menu, "Undo", !undo.isEmpty(), () -> changeHistory(true));
@@ -528,11 +585,12 @@ public final class MainActivity extends Activity {
         updateTabs();
         showPage(0, 0);
     }
-    private void pickFile() {
+    void pickFile() {
+        if (busy) return;
         startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
             .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), OPEN);
     }
-    void pickFolder() { startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), FOLDER); }
+    void pickFolder() { if (!busy) startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), FOLDER); }
 
     private void persist(Uri uri, Intent data) {
         int granted = data.getFlags();
@@ -553,8 +611,8 @@ public final class MainActivity extends Activity {
         }
         Uri uri = data.getData();
         persist(uri, data);
-        if (request == OPEN) requestOpen(uri, -1, 0, null);
-        else if (request == FOLDER) workspace.choose(uri);
+        if (request == OPEN) requestOpen(uri, -1, 0, null, true, true);
+        else if (request == FOLDER) { workspace.choose(uri); showFiles(); }
         else if (request == CREATE) {
             Runnable follow = afterCreate; afterCreate = null;
             write(uri, follow);
@@ -569,9 +627,20 @@ public final class MainActivity extends Activity {
             .setNeutralButton("Cancel", null).show();
     }
 
+    void openBrowserFile(Uri target, long offset, int select) {
+        requestOpen(target, offset, select, null, true, false);
+    }
+
     void requestOpen(Uri target, long offset, int select, Navigation.Place place) {
+        requestOpen(target, offset, select, place, false, false);
+    }
+
+    private void requestOpen(Uri target, long offset, int select, Navigation.Place place,
+                             boolean closeDrawer, boolean individualGrant) {
         if (busy) return;
         if (target.equals(file.uri)) {
+            if (individualGrant) workspace.openedFile(target, file.name);
+            if (closeDrawer) setDrawerOpen(false);
             if (offset >= 0) {
                 if (select > 0) previewing = false;
                 showPage(offset, select);
@@ -581,6 +650,8 @@ public final class MainActivity extends Activity {
         leave(() -> {
             remember();
             runIO("Opening file…", () -> EditorFile.open(this, target), opened -> {
+                if (individualGrant) workspace.openedFile(target, opened.name);
+                if (closeDrawer) setDrawerOpen(false);
                 install(opened, offset, select, place);
             });
         });
@@ -660,6 +731,8 @@ public final class MainActivity extends Activity {
     @Override public boolean onKeyShortcut(int code, KeyEvent event) {
         if (busy || !event.isCtrlPressed()) return super.onKeyShortcut(code, event);
         switch (code) {
+            case KeyEvent.KEYCODE_P -> { showFiles(); workspace.focusSearch(false); }
+            case KeyEvent.KEYCODE_F -> { if (!event.isShiftPressed()) return super.onKeyShortcut(code, event); showFiles(); workspace.focusSearch(true); }
             case KeyEvent.KEYCODE_O -> { if (event.isShiftPressed()) pickFolder(); else pickFile(); }
             case KeyEvent.KEYCODE_S -> save(event.isShiftPressed(), null);
             case KeyEvent.KEYCODE_Z -> changeHistory(!event.isShiftPressed());
@@ -671,6 +744,7 @@ public final class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
+        if (drawerOpen && !wide) { setDrawerOpen(false); return; }
         if (busy) return;
         if (navigation.relative(currentTab == 0 ? 0 : -1) != null) travel(-1);
         else leave(this::finish);
@@ -679,6 +753,7 @@ public final class MainActivity extends Activity {
     @Override protected void onSaveInstanceState(Bundle state) {
         super.onSaveInstanceState(state);
         state.putBoolean("untitled", file.uri == null);
+        state.putBoolean("filesDrawer", drawerOpen);
     }
     @Override protected void onDestroy() {
         workspace.close();

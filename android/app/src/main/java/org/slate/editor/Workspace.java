@@ -19,6 +19,7 @@ final class Workspace {
     record Entry(String name, String path, Uri uri, boolean directory, long offset, int length) {}
     record Listing(List<Entry> entries, boolean more) {}
     record Results(List<Entry> entries, int unreadable) {}
+    record Scope(Workspace workspace, String name) {}
 
     final Uri tree;
     final Uri root;
@@ -56,13 +57,23 @@ final class Workspace {
         }
     }
 
-    Results find(String term, boolean contents, CancellationSignal cancel) {
-        Scan scan = new Scan(term, contents, cancel);
-        scan.walk(root, "");
+    static Results find(ContentResolver resolver, List<Scope> folders, List<Entry> files, String term,
+                        boolean contents, CancellationSignal cancel) {
+        Scan scan = new Scan(resolver, term, contents, cancel);
+        for (Scope scope : folders) {
+            if (scan.hits.size() >= LIMIT) break;
+            scan.walk(scope.workspace, scope.workspace.root, folders.size() > 1 ? scope.name + "/" : "");
+        }
+        for (Entry file : files) {
+            if (scan.hits.size() >= LIMIT) break;
+            cancel.throwIfCanceled();
+            scan.match(file);
+        }
         return new Results(scan.hits, scan.skipped);
     }
 
-    private class Scan {
+    private static class Scan {
+        final ContentResolver resolver;
         final String query;
         final byte[] term;
         final int[] failure;
@@ -71,9 +82,12 @@ final class Workspace {
         final boolean contents;
         final List<Entry> hits = new ArrayList<>();
         final Set<Uri> ancestors = new HashSet<>();
+        record Match(String authority, String document, long offset) {}
+        final Set<Match> found = new HashSet<>();
         int skipped;
 
-        Scan(String query, boolean contents, CancellationSignal cancel) {
+        Scan(ContentResolver resolver, String query, boolean contents, CancellationSignal cancel) {
+            this.resolver = resolver;
             this.query = query.toLowerCase(Locale.ROOT);
             term = query.getBytes(UTF_8);
             this.contents = contents;
@@ -85,21 +99,32 @@ final class Workspace {
             }
         }
 
-        void walk(Uri dir, String prefix) {
+        void walk(Workspace ws, Uri dir, String prefix) {
             if (ancestors.size() >= 128 || !ancestors.add(dir)) { skipped++; return; }
-            try (Cursor cursor = children(dir, cancel)) {
+            try (Cursor cursor = ws.children(dir, cancel)) {
                 while (hits.size() < LIMIT && cursor.moveToNext()) {
                     cancel.throwIfCanceled();
-                    Entry e = entry(cursor, prefix);
-                    if (e.directory) walk(e.uri, e.path + "/");
-                    else if (contents) scanFile(e);
-                    else if (e.path.toLowerCase(Locale.ROOT).contains(query)) hits.add(e);
+                    Entry e = ws.entry(cursor, prefix);
+                    if (e.directory) walk(ws, e.uri, e.path + "/");
+                    else match(e);
                 }
             } catch (IOException | SecurityException e) {
                 skipped++;
             } finally {
                 ancestors.remove(dir);
             }
+        }
+
+        void match(Entry e) {
+            if (contents) scanFile(e);
+            else if (e.path.toLowerCase(Locale.ROOT).contains(query)) add(e);
+        }
+
+        void add(Entry hit) {
+            List<String> path = hit.uri.getPathSegments();
+            int index = path.indexOf("document");
+            String id = index >= 0 && index + 1 < path.size() ? path.get(index + 1) : hit.uri.toString();
+            if (found.add(new Match(hit.uri.getAuthority(), id, hit.offset))) hits.add(hit);
         }
 
         void scanFile(Entry e) {
@@ -112,7 +137,7 @@ final class Workspace {
                     for (int i = 0; i < n; i++) {
                         while (matched > 0 && block[i] != term[matched]) matched = failure[matched - 1];
                         if (block[i] == term[matched] && ++matched == term.length) {
-                            hits.add(new Entry(e.name, e.path, e.uri, false, offset + i + 1 - term.length, term.length));
+                            add(new Entry(e.name, e.path, e.uri, false, offset + i + 1 - term.length, term.length));
                             if (hits.size() == LIMIT) return;
                             matched = 0;
                         }
