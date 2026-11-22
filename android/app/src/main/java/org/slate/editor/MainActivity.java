@@ -19,7 +19,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 
 @SuppressWarnings("deprecation")
 public final class MainActivity extends Activity {
-    private static final int OPEN = 1, FOLDER = 2, CREATE = 3;
+    private static final int OPEN = 1, FOLDER = 2, CREATE = 3, NEW_PARENT = 4;
     private static final int SOURCE_PAGE = 32 * 1024, PREVIEW_PAGE = 128 * 1024;
     private static final int HISTORY_BYTES = 8 * 1024 * 1024;
     private final ExecutorService io = Executors.newSingleThreadExecutor();
@@ -260,12 +260,16 @@ public final class MainActivity extends Activity {
             notifyDataSetChanged();
         }
         @Override public int getCount() { return count; }
-        @Override public Navigation.Place getItem(int index) { return navigation.tab((long)index + 1); }
-        @Override public long getItemId(int index) { return (long)index + 1; }
+        @Override public Navigation.Place getItem(int index) { return navigation.tabAt(index); }
+        @Override public long getItemId(int index) {
+            Navigation.Place place = getItem(index);
+            return place == null ? AdapterView.INVALID_ROW_ID : place.tab();
+        }
         @Override public boolean hasStableIds() { return true; }
         @Override public View getView(int index, View reuse, ViewGroup parent) {
             TextView label = reuse instanceof TextView ? (TextView)reuse : new TextView(MainActivity.this);
             Navigation.Place place = getItem(index);
+            if (place == null) { label.setText(""); label.setContentDescription(null); return label; }
             boolean active = place.tab() == currentTab;
             label.setText(place.name());
             label.setContentDescription(place.name() + (active ? ", current tab" : ""));
@@ -287,7 +291,7 @@ public final class MainActivity extends Activity {
         workspace.select(file.uri);
         currentTab = file.uri != null && place != null && file.uri.equals(place.uri()) ? place.tab() : 0;
         tabAdapter.refresh();
-        if (currentTab > 0) tabs.setSelection((int)(currentTab - 1), false);
+        if (currentTab > 0) tabs.setSelection(navigation.indexOf(currentTab), false);
         tabBar.setVisibility(tabAdapter.getCount() > 0 ? View.VISIBLE : View.GONE);
         back.setEnabled(!busy && navigation.relative(currentTab == 0 ? 0 : -1) != null);
         forward.setEnabled(!busy && currentTab != 0 && navigation.relative(1) != null);
@@ -559,7 +563,9 @@ public final class MainActivity extends Activity {
     private void menu() {
         PopupMenu menu = new PopupMenu(new ContextThemeWrapper(this,
             theme.dark ? android.R.style.Theme_Material : android.R.style.Theme_Material_Light), more);
-        item(menu, "New file", true, () -> leave(this::newFile));
+        item(menu, "New file…", true, workspace::newFile);
+        item(menu, "New untitled document", true, () -> leave(this::newFile));
+        if (file.uri != null) item(menu, "Delete file…", true, () -> deleteFile(file.uri, file.name));
         item(menu, "Open file…", true, this::pickFile);
         item(menu, "Open folder…", true, this::pickFolder);
         if (workspace.hasFolder()) {
@@ -579,6 +585,10 @@ public final class MainActivity extends Activity {
 
     private void newFile() {
         remember();
+        resetDocument();
+    }
+
+    private void resetDocument() {
         file.close();
         file = new EditorFile();
         previewing = false;
@@ -592,6 +602,7 @@ public final class MainActivity extends Activity {
             .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), OPEN);
     }
     void pickFolder() { if (!busy) startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), FOLDER); }
+    void pickNewParent() { if (!busy) startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), NEW_PARENT); }
 
     private void persist(Uri uri, Intent data) {
         int granted = data.getFlags();
@@ -614,6 +625,7 @@ public final class MainActivity extends Activity {
         persist(uri, data);
         if (request == OPEN) requestOpen(uri, -1, 0, null, true, true);
         else if (request == FOLDER) { workspace.choose(uri); showFiles(); }
+        else if (request == NEW_PARENT) { workspace.choose(uri); showFiles(); workspace.newAtRoot(uri); }
         else if (request == CREATE) {
             Runnable follow = afterCreate; afterCreate = null;
             write(uri, follow);
@@ -626,6 +638,54 @@ public final class MainActivity extends Activity {
             .setPositiveButton("Save", (d, w) -> save(false, action))
             .setNegativeButton("Discard", (d, w) -> action.run())
             .setNeutralButton("Cancel", null).show();
+    }
+
+    void createFile(Workspace scope, Uri parent, String name) {
+        if (busy) return;
+        leave(() -> {
+            remember();
+            runIO("Creating file…", () -> scope.create(parent, name), created -> {
+                workspace.created(parent, created.pageStart());
+                // Creating succeeded even if this provider subsequently refuses
+                // a read. Refresh the folder before attempting to open it.
+                runIO("Opening new file…", () -> EditorFile.open(this, created.uri()), opened -> {
+                    setDrawerOpen(false);
+                    install(opened, 0, 0, null);
+                });
+            });
+        });
+    }
+
+    void deleteFile(Uri target, String name) {
+        if (busy) return;
+        boolean active = file.uri != null && Workspace.documentKey(file.uri).equals(Workspace.documentKey(target));
+        boolean unsaved = active && file.dirty;
+        AlertDialog.Builder confirm = dialog().setTitle("Delete “" + name + "”?")
+            .setMessage(unsaved ? "This file has unsaved edits. Deleting it discards the edits and removes the file from storage."
+                : "The file will be removed from storage.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton(unsaved ? "Delete and discard edits" : "Delete", (d, w) -> {
+                remember();
+                runIO("Deleting file…", () -> {
+                    Workspace.delete(this, target);
+                    try { navigation.remove(target); return (RuntimeException)null; }
+                    catch (RuntimeException cleanupError) { return cleanupError; }
+                }, cleanupError -> {
+                    // Once the provider deletes the file, release its editable
+                    // model even if the local history database could not update.
+                    if (active) resetDocument();
+                    workspace.deleted(target);
+                    if (active) {
+                        Navigation.Place nearby = cleanupError == null ? navigation.relative(0) : null;
+                        if (nearby != null) followHistory(nearby, -1);
+                        else showFiles();
+                    } else updateTabs();
+                    if (cleanupError == null) toast("Deleted " + name);
+                    else error(new IllegalStateException("Deleted " + name + ". Could not update file history.", cleanupError));
+                });
+            });
+        if (unsaved) confirm.setNeutralButton("Save a copy…", (d, w) -> save(true, null));
+        confirm.show();
     }
 
     void openBrowserFile(Uri target, long offset, int select) {
@@ -707,9 +767,8 @@ public final class MainActivity extends Activity {
                         return;
                     }
                     busy = false;
-                    refresh();
-                    updateTabs();
                     done.accept(value);
+                    if (!busy) { refresh(); updateTabs(); }
                 });
             } catch (Exception e) {
                 runOnUiThread(() -> {

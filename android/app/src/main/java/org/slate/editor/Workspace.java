@@ -1,6 +1,8 @@
 package org.slate.editor;
 
 import android.content.ContentResolver;
+import android.content.Context;
+import android.webkit.MimeTypeMap;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.CancellationSignal;
@@ -55,6 +57,74 @@ final class Workspace {
                 .thenComparing(Entry::name, String.CASE_INSENSITIVE_ORDER));
             return new Listing(entries, more);
         }
+    }
+
+    static String documentKey(Uri uri) {
+        List<String> parts = uri.getPathSegments();
+        int index = parts.indexOf("document");
+        return index >= 0 && index + 1 < parts.size()
+            ? DocumentsContract.buildDocumentUri(uri.getAuthority(), parts.get(index + 1)).toString() : uri.toString();
+    }
+
+    static String invalidName(String name) {
+        if (name.trim().isEmpty() || name.equals(".") || name.equals("..")) return "Enter a file name.";
+        for (int i = 0; i < name.length(); i++) {
+            char c = name.charAt(i);
+            if (c == '/' || c == '\\' || Character.isISOControl(c))
+                return "Use a file name without paths or control characters.";
+        }
+        return null;
+    }
+
+    record Info(String name, String mime, int flags) {}
+
+    static Info info(ContentResolver resolver, Uri doc) throws IOException {
+        String[] fields = {Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE, Document.COLUMN_FLAGS};
+        try (Cursor c = resolver.query(doc, fields, null, null, null)) {
+            if (c == null || !c.moveToFirst()) throw new FileNotFoundException("This item is no longer available.");
+            return new Info(c.getString(0), c.getString(1), c.getInt(2));
+        }
+    }
+
+    record Created(Uri uri, int pageStart) {}
+
+    Created create(Uri parent, String name) throws IOException {
+        String problem = invalidName(name);
+        if (problem != null) throw new IOException(problem);
+        Info folder = info(resolver, parent);
+        if (!Document.MIME_TYPE_DIR.equals(folder.mime) || (folder.flags & Document.FLAG_DIR_SUPPORTS_CREATE) == 0)
+            throw new IOException("This folder does not allow new files.");
+        try (Cursor c = children(parent, null)) {
+            while (c.moveToNext()) if (name.equals(c.getString(1)))
+                throw new IOException("A file or folder named “" + name + "” already exists.");
+        }
+        int dot = name.lastIndexOf('.');
+        String mime = dot > 0 && dot < name.length() - 1
+            ? MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substring(dot + 1).toLowerCase(Locale.ROOT)) : null;
+        Uri created;
+        try {
+            created = DocumentsContract.createDocument(resolver, parent, mime == null ? "application/octet-stream" : mime, name);
+        } catch (SecurityException denied) { throw new IOException("Slate does not have write access to this folder.", denied); }
+        if (created == null) throw new IOException("The provider could not create this file.");
+        // Reveal the new row even when the provider places it on a later
+        // directory page. Only the cursor window is held while locating it.
+        String id = DocumentsContract.getDocumentId(created);
+        try (Cursor c = children(parent, null)) {
+            while (c.moveToNext()) if (id.equals(c.getString(0))) return new Created(created, c.getPosition() / PAGE * PAGE);
+        } catch (IOException | RuntimeException ignored) { /* The file was created. */ }
+        return new Created(created, -1);
+    }
+
+    static void delete(Context context, Uri target) throws IOException {
+        if (!DocumentsContract.isDocumentUri(context, target))
+            throw new IOException("This provider does not support deleting this file in Slate.");
+        ContentResolver resolver = context.getContentResolver();
+        Info doc = info(resolver, target);
+        if (doc.mime == null || Document.MIME_TYPE_DIR.equals(doc.mime)) throw new IOException("Choose a file to delete.");
+        if ((doc.flags & Document.FLAG_SUPPORTS_DELETE) == 0) throw new IOException("This file is read-only.");
+        try {
+            if (!DocumentsContract.deleteDocument(resolver, target)) throw new IOException("The provider did not delete this file.");
+        } catch (SecurityException denied) { throw new IOException("Slate does not have permission to delete this file.", denied); }
     }
 
     static Results find(ContentResolver resolver, List<Scope> folders, List<Entry> files, String term,

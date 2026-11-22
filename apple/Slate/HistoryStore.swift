@@ -29,6 +29,7 @@ final class HistoryStore {
             CREATE TABLE IF NOT EXISTS tabs(id INTEGER PRIMARY KEY, file BLOB NOT NULL, caret INTEGER DEFAULT 0,
                                             preview INTEGER DEFAULT 0, path TEXT);
             CREATE TABLE IF NOT EXISTS visits(position INTEGER PRIMARY KEY, tab INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS visits_by_tab ON visits(tab);
             CREATE TABLE IF NOT EXISTS state(id INTEGER PRIMARY KEY, position INTEGER NOT NULL, showing INTEGER NOT NULL);
             CREATE TEMP TABLE unavailable(id INTEGER PRIMARY KEY);
             """) else { return nil }
@@ -89,7 +90,8 @@ final class HistoryStore {
         return true
     }
 
-    var tabCount: Int { (value("SELECT MAX(id) FROM tabs") ?? -1) + 1 }
+    var tabCount: Int { value("SELECT COUNT(*) FROM tabs") ?? 0 }
+    var nextTabID: Int { (value("SELECT MAX(id) FROM tabs") ?? -1) + 1 }
     var position: Int { value("SELECT position FROM state WHERE id=1") ?? -1 }
     var showing: Bool { value("SELECT showing FROM state WHERE id=1") == 1 }
 
@@ -117,8 +119,9 @@ final class HistoryStore {
         }
     }
 
-    func tabs(from start: Int, limit: Int) -> [NavigationHistory.Tab] {
-        statement("SELECT id,path,caret,preview FROM tabs WHERE id>=? ORDER BY id LIMIT ?") { stmt in
+    func tabs(from start: Int, limit: Int, backward: Bool = false) -> [NavigationHistory.Tab] {
+        let ordering = backward ? "id<=? ORDER BY id DESC" : "id>=? ORDER BY id"
+        return statement("SELECT id,path,caret,preview FROM tabs WHERE \(ordering) LIMIT ?") { stmt in
             sqlite3_bind_int64(stmt, 1, Int64(start))
             sqlite3_bind_int64(stmt, 2, Int64(limit))
             var tabs: [NavigationHistory.Tab] = []
@@ -160,6 +163,28 @@ final class HistoryStore {
             run("ROLLBACK")
             throw error
         }
+    }
+
+    // Preserve stable tab IDs and visit positions. Both deletions use indexes.
+    func remove(path: String, tabID: Int?, active: Int?, position: Int) throws -> Set<Int> {
+        let ids: Set<Int> = statement("SELECT id FROM tabs WHERE path=? OR id=?") { stmt in
+            bind(path, to: stmt, at: 1)
+            sqlite3_bind_int64(stmt, 2, Int64(tabID ?? -1))
+            var ids: Set<Int> = []
+            while sqlite3_step(stmt) == SQLITE_ROW { ids.insert(Int(sqlite3_column_int64(stmt, 0))) }
+            return ids
+        } ?? []
+        guard !ids.isEmpty else { return [] }
+        let list = ids.map(String.init).joined(separator: ",")
+        guard run("BEGIN IMMEDIATE") else { throw failure }
+        guard run("DELETE FROM visits WHERE tab IN (\(list))"), run("DELETE FROM tabs WHERE id IN (\(list))"),
+              active.map({ !ids.contains($0) || setPosition(position, showing: false) }) ?? true,
+              run("COMMIT") else {
+            let error = failure
+            run("ROLLBACK")
+            throw error
+        }
+        return ids
     }
 
     @discardableResult

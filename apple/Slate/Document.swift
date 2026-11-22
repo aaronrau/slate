@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 struct EditorFailure: LocalizedError {
     let message: String
@@ -118,12 +119,12 @@ final class ScopedURL {
     }
 }
 
-func coordinated<T>(_ url: URL, writing: Bool = false, _ action: (URL) throws -> T) throws -> T {
+func coordinated<T>(_ url: URL, writing: NSFileCoordinator.WritingOptions? = nil, _ action: (URL) throws -> T) throws -> T {
     let coordinator = NSFileCoordinator(filePresenter: nil)
     var error: NSError?
     var outcome: Result<T, Error>?
-    if writing {
-        coordinator.coordinate(writingItemAt: url, options: .forReplacing, error: &error) { item in
+    if let writing {
+        coordinator.coordinate(writingItemAt: url, options: writing, error: &error) { item in
             outcome = Result { try action(item) }
         }
     } else {
@@ -156,7 +157,7 @@ struct FileRevision: Equatable {
 }
 
 func saveDocument(_ snapshot: Document, to target: URL, revision: FileRevision?) throws -> FileRevision {
-    try coordinated(target, writing: true) { url in
+    try coordinated(target, writing: .forReplacing) { url in
         do {
             try snapshot.save(url)
         } catch let failure as EditorFailure where failure.message.contains("Create temporary save file") {
@@ -178,5 +179,69 @@ func saveDocument(_ snapshot: Document, to target: URL, revision: FileRevision?)
             try snapshot.open(url)
         }
         return try FileRevision(url)
+    }
+}
+
+struct FileDeletion: Identifiable {
+    let id = UUID()
+    let access: ScopedURL
+    let revision: FileRevision
+    let tabID: Int?
+
+    init(_ access: ScopedURL, tabID: Int? = nil) throws {
+        self.access = access
+        self.tabID = tabID
+        revision = try coordinated(access.url) { url in
+            try Self.requireRegularFile(url)
+            return try FileRevision(url)
+        }
+    }
+
+    private static func requireRegularFile(_ url: URL) throws {
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        guard (info.st_mode & S_IFMT) == S_IFREG else { throw EditorFailure("Choose a regular file to delete.") }
+    }
+
+    func remove() throws {
+        try coordinated(access.url, writing: .forDeleting) { url in
+            try Self.requireRegularFile(url)
+            guard try FileRevision(url) == revision else { throw EditorFailure("This file changed. Choose it again before deleting.") }
+            // unlink never descends into a directory, including one substituted
+            // after the checks above. Notify File Provider through coordination.
+            guard unlink(url.path) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        }
+    }
+}
+
+func createEmptyFile(named name: String, in directory: URL, grant: ScopedURL) throws -> ScopedURL {
+    guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name != ".", name != "..",
+          !name.contains("/"), !name.contains("\\"), name.rangeOfCharacter(from: .controlCharacters) == nil else {
+        throw EditorFailure("Enter a single file name without slashes or control characters.")
+    }
+    return try coordinated(directory, writing: []) { folder in
+        let base = grant.url.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        let actual = folder.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        guard actual.starts(with: base) else { throw EditorFailure("Choose a folder inside the workspace.") }
+
+        // Walk the granted folder descriptor, rejecting symlinks introduced
+        // after path resolution. O_EXCL makes name collision handling atomic.
+        let flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        var parent = Darwin.open(grant.url.resolvingSymlinksInPath().path, flags)
+        guard parent >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { close(parent) }
+        for component in actual.dropFirst(base.count) {
+            let child = slate_openat(parent, component, flags, 0)
+            guard child >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            close(parent)
+            parent = child
+        }
+        let fd = slate_openat(parent, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        if fd < 0 {
+            if errno == EEXIST { throw EditorFailure("A file or folder named “\(name)” already exists.") }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        close(fd)
+        return ScopedURL(directory.appendingPathComponent(name, isDirectory: false), parent: grant)
     }
 }

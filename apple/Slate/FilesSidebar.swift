@@ -7,11 +7,17 @@ struct FilesSidebar: View {
     let pickFolder: () -> Void
     let select: (FileRow, ScopedURL) -> Void
     let selectTab: (NavigationHistory.Tab) -> Void
+    let created: (URL) -> Void
+    @State private var creation: NewFileRequest?
+    @State private var submitted: (String, FileDestination)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Files").font(.headline)
+                Button { newFile(in: nil) } label: {
+                    Label("New File…", systemImage: "doc.badge.plus").font(.callout)
+                }
+                .buttonStyle(.plain).disabled(workspace.locations.isEmpty || model.busy).accessibilityIdentifier("files-new")
                 Spacer()
                 Button(action: pickFolder) {
                     Label("Open Folder…", systemImage: "folder.badge.plus").font(.callout)
@@ -48,18 +54,24 @@ struct FilesSidebar: View {
                                 workspace.toggle(location)
                             }
                             .contextMenu {
+                                Button("New File…") { newFile(in: FileDestination(location: location, url: branch?.url ?? location.reference.url)) }
                                 Button("Refresh") { workspace.refresh() }
                                 if !location.local {
                                     Button("Remove from Files") { workspace.forget(location) }
                                 }
                             }
                             if let branch {
-                                BranchRows(branch: branch, appearance: appearance, selectedPath: selected, depth: 1, select: select)
+                                BranchRows(branch: branch, appearance: appearance, selectedPath: selected, depth: 1, select: select,
+                                           create: { newFile(in: FileDestination(location: location, url: $0)) },
+                                           delete: { model.requestDeletion($0) })
                             }
                             if let error = workspace.errors[location.id] { note(error) }
                         }
                         if workspace.locations.isEmpty { note("Open a folder to browse its files.") }
-                        OpenedFiles(history: model.history, appearance: appearance, select: selectTab)
+                        OpenedFiles(history: model.history, select: selectTab, delete: { tab in
+                            do { model.requestDeletion(try model.history.acquire(tab), tabID: tab.id) }
+                            catch { model.errorMessage = error.localizedDescription }
+                        })
                     } else {
                         ForEach(workspace.hits) { row in
                             Button {
@@ -74,6 +86,12 @@ struct FilesSidebar: View {
                                     if !row.excerpt.isEmpty { Text(row.excerpt).font(.caption.monospaced()).lineLimit(2) }
                                 }.frame(maxWidth: .infinity, alignment: .leading).padding(10).contentShape(Rectangle())
                             }.buttonStyle(.plain)
+                            .contextMenu {
+                                Button("Delete File…", role: .destructive) {
+                                    do { model.requestDeletion(ScopedURL(row.url, parent: try workspace.access(for: row))) }
+                                    catch { model.errorMessage = error.localizedDescription }
+                                }
+                            }
                         }
                         if workspace.searching { ProgressView().controlSize(.small).padding(12) }
                         else if workspace.hits.isEmpty { note("No matches") }
@@ -87,6 +105,24 @@ struct FilesSidebar: View {
         .background(appearance.color(.surface))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("files-sidebar")
+        .sheet(item: $creation, onDismiss: {
+            guard let (name, destination) = submitted else { return }
+            submitted = nil
+            model.createFile(named: name, destination: destination, workspace: workspace, created: created)
+        }) { request in
+            NewFileForm(request: request) { name, destination in
+                submitted = (name, destination)
+                creation = nil
+            }
+        }
+    }
+
+    private func newFile(in folder: FileDestination?) {
+        let choices = workspace.destinations(including: folder)
+        let currentParent = model.file?.url.deletingLastPathComponent().standardizedFileURL.path
+        if let destination = folder ?? choices.first(where: { $0.url.standardizedFileURL.path == currentParent }) ?? choices.first {
+            creation = NewFileRequest(choices: choices, destination: destination)
+        }
     }
 
     private var selected: String? { model.file?.url.standardizedFileURL.path }
@@ -122,6 +158,8 @@ private struct BranchRows: View {
     let selectedPath: String?
     let depth: Int
     let select: (FileRow, ScopedURL) -> Void
+    let create: (URL) -> Void
+    let delete: (ScopedURL) -> Void
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 0) {
@@ -131,8 +169,9 @@ private struct BranchRows: View {
                     FolderButton(name: row.url.lastPathComponent, expanded: child != nil, appearance: appearance, depth: depth) {
                         branch.toggle(row.url)
                     }
+                    .contextMenu { Button("New File…") { create(row.url) }.accessibilityIdentifier("folder-new-file") }
                     if let child {
-                        BranchRows(branch: child, appearance: appearance, selectedPath: selectedPath, depth: depth + 1, select: select)
+                        BranchRows(branch: child, appearance: appearance, selectedPath: selectedPath, depth: depth + 1, select: select, create: create, delete: delete)
                     }
                 } else {
                     let selected = selectedPath == row.url.standardizedFileURL.path
@@ -149,6 +188,7 @@ private struct BranchRows: View {
                     .buttonStyle(.plain).accessibilityLabel(row.url.lastPathComponent)
                     .accessibilityIdentifier("tree-file-" + row.url.lastPathComponent)
                     .accessibilityAddTraits(selected ? .isSelected : [])
+                    .contextMenu { Button("Delete File…", role: .destructive) { delete(ScopedURL(row.url, parent: branch.access)) } }
                 }
             }
             if branch.busy { ProgressView().controlSize(.small).padding(.leading, 32) }
@@ -164,15 +204,15 @@ private struct BranchRows: View {
 
 private struct OpenedFiles: View {
     @ObservedObject var history: NavigationHistory
-    let appearance: Appearance
     let select: (NavigationHistory.Tab) -> Void
+    let delete: (NavigationHistory.Tab) -> Void
     @State private var expanded = false
-    @State private var start = 0
+    @State private var oldest = Int.max
 
     var body: some View {
         if history.tabCount > 0 {
             Button {
-                if !expanded { start = max(0, history.tabCount - NavigationHistory.stripSize) }
+                if !expanded { oldest = Int.max }
                 expanded.toggle()
             } label: {
                 Label("Opened files", systemImage: "clock.arrow.circlepath").font(.callout)
@@ -180,21 +220,76 @@ private struct OpenedFiles: View {
                     .contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityValue(expanded ? "Expanded" : "Collapsed")
             if expanded {
-                ForEach(history.tabPage(starting: start).reversed()) { tab in
+                let page = history.tabPage(starting: oldest, backward: true)
+                ForEach(page) { tab in
                     Button { select(tab) } label: {
                         Label(tab.name, systemImage: "doc.text").lineLimit(1)
                             .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 30).frame(minHeight: 36)
                             .contentShape(Rectangle())
                     }.buttonStyle(.plain).help(tab.path)
+                    .contextMenu { Button("Delete File…", role: .destructive) { delete(tab) } }
                 }
-                if start > 0 || start + NavigationHistory.stripSize < history.tabCount {
+                let earlier = page.last.flatMap { history.tabPage(starting: $0.id - 1, backward: true, limit: 1).first }
+                let later = page.first.flatMap { history.tabPage(starting: $0.id + 1).last }
+                if earlier != nil || later != nil {
                     HStack {
-                        Button("Older") { start = max(0, start - NavigationHistory.stripSize) }.disabled(start == 0)
-                        Button("Newer") { start = min(history.tabCount - 1, start + NavigationHistory.stripSize) }
-                            .disabled(start + NavigationHistory.stripSize >= history.tabCount)
+                        Button("Older") { if let earlier { oldest = earlier.id } }.disabled(earlier == nil)
+                        Button("Newer") { if let later { oldest = later.id } }.disabled(later == nil)
                     }.padding(.leading, 30)
                 }
             }
         }
+    }
+}
+
+private struct NewFileRequest: Identifiable {
+    let id = UUID()
+    let choices: [FileDestination]
+    let destination: FileDestination
+}
+
+private struct NewFileForm: View {
+    let request: NewFileRequest
+    let submit: (String, FileDestination) -> Void
+    @State private var name = ""
+    @State private var selected: URL
+    @FocusState private var editingName: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    init(request: NewFileRequest, submit: @escaping (String, FileDestination) -> Void) {
+        self.request = request
+        self.submit = submit
+        _selected = State(initialValue: request.destination.url)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("File name", text: $name)
+                    .focused($editingName).autocorrectionDisabled().accessibilityIdentifier("new-file-name")
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
+                Picker("Folder", selection: $selected) {
+                    ForEach(request.choices) { folder in Text(folder.label).tag(folder.url) }
+                }
+            }.formStyle(.grouped)
+            .navigationTitle("New File")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") {
+                        if let folder = request.choices.first(where: { $0.url == selected }) { submit(name, folder) }
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .onAppear { editingName = true }
+        #if os(macOS)
+        .frame(minWidth: 360, minHeight: 200)
+        #else
+        .presentationDetents([.medium, .large])
+        #endif
     }
 }

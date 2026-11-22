@@ -149,6 +149,17 @@ public final class EditorTest extends ActivityInstrumentationTestCase2<MainActiv
                 assertEquals(756L, restored.relative(0).offset());
                 assertEquals(b, restored.relative(-1).uri());
                 assertEquals((4093L << 32), restored.relative(-1).offset());
+                restored.remove(c);
+                assertEquals(b, restored.relative(0).uri());
+                assertNull(restored.relative(1));
+                restored.remove(a);
+                assertEquals(1, restored.tabCount());
+                assertEquals(b, restored.tabAt(0).uri());
+                assertEquals(0, restored.indexOf(restored.relative(0).tab()));
+            }
+            try (Navigation again = new Navigation(context, dbName)) {
+                assertEquals(b, again.relative(0).uri());
+                assertEquals((4093L << 32), again.relative(0).offset());
             }
         } finally { context.deleteDatabase(dbName); }
     }
