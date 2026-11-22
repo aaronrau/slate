@@ -1,5 +1,13 @@
 import SwiftUI
 
+// The UserDefaults key for whether the Mac window shows the Files sidebar.
+let filesVisibleKey = "Slate.showFiles"
+#if os(macOS)
+private let tabHeight: CGFloat = 32
+#else
+private let tabHeight: CGFloat = 40
+#endif
+
 struct EditorWindow: View {
     @ObservedObject var model: EditorModel
     @ObservedObject var appearance: Appearance
@@ -8,51 +16,19 @@ struct EditorWindow: View {
     let pickFolder: () -> Void
     let showInFolder: (ScopedURL) -> Void
     let settings: () -> Void
+    #if os(macOS)
+    // Shown and hidden from View > Show Files; the menu shares this setting.
+    @AppStorage(filesVisibleKey) private var sidebar = true
+    #else
     @State private var sidebar = true
+    #endif
     @State private var compactBrowser = false
     @State private var pendingSelection: URL?
     @State private var exportName = ""
     @State private var slider: Double?
 
     var body: some View {
-        GeometryReader { geometry in
-            let compact = geometry.size.width < 720
-            VStack(spacing: 0) {
-                toolbar(compact: compact)
-                rule
-                ZStack(alignment: .leading) {
-                    HStack(spacing: 0) {
-                        if !compact && sidebar {
-                            files(compact: false).frame(width: 264)
-                            Rectangle().fill(appearance.color(.border)).frame(width: 1)
-                        }
-                        VStack(spacing: 0) {
-                            TabStrip(history: model.history, model: model, appearance: appearance, showInFolder: showInFolder)
-                            rule
-                            if model.preview && model.page.isUTF8 {
-                                PreviewView(content: PreviewContent(model.page, appearance))
-                            } else {
-                                SourceView(model: model, appearance: appearance)
-                            }
-                            rule
-                            pageFooter
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                    .accessibilityHidden(compact && compactBrowser)
-                    if compact && compactBrowser {
-                        Button { compactBrowser = false } label: { Color.black.opacity(0.45) }
-                            .buttonStyle(.plain).accessibilityLabel("Close Files")
-                        files(compact: true)
-                            .frame(width: min(322, geometry.size.width * 0.84))
-                            .shadow(color: .black.opacity(0.25), radius: 8, x: 3)
-                            .transition(.move(edge: .leading))
-                    }
-                }
-            }
-            .foregroundStyle(appearance.color(.text))
-            .background(appearance.color(.background))
-        }
+        content
         .onChange(of: workspace.folderPicked) { sidebar = true; compactBrowser = true }
         .onChange(of: model.file?.url) { _, url in
             workspace.clearReveal()
@@ -92,8 +68,69 @@ struct EditorWindow: View {
         #endif
     }
 
+    // The document's tabs, text and page controls.
+    private var viewer: some View {
+        VStack(spacing: 0) {
+            TabStrip(history: model.history, model: model, appearance: appearance, showInFolder: showInFolder)
+            rule
+            if model.preview && model.page.isUTF8 {
+                PreviewView(content: PreviewContent(model.page, appearance))
+            } else {
+                SourceView(model: model, appearance: appearance)
+            }
+            rule
+            pageFooter
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // The Mac window has no toolbar: files on the left, the document on the right,
+    // and every command in the menu bar.
+    @ViewBuilder private var content: some View {
+        #if os(macOS)
+        HSplitView {
+            if sidebar {
+                files(compact: false).frame(minWidth: 180, idealWidth: 260, maxWidth: 480, maxHeight: .infinity)
+            }
+            viewer.frame(minWidth: 320)
+        }
+        .foregroundStyle(appearance.color(.text))
+        .background(appearance.color(.background))
+        .navigationTitle(model.file == nil ? "Slate" : model.title)
+        #else
+        GeometryReader { geometry in
+            let compact = geometry.size.width < 720
+            VStack(spacing: 0) {
+                toolbar(compact: compact)
+                rule
+                ZStack(alignment: .leading) {
+                    HStack(spacing: 0) {
+                        if !compact && sidebar {
+                            files(compact: false).frame(width: 264)
+                            Rectangle().fill(appearance.color(.border)).frame(width: 1)
+                        }
+                        viewer
+                    }
+                    .accessibilityHidden(compact && compactBrowser)
+                    if compact && compactBrowser {
+                        Button { compactBrowser = false } label: { Color.black.opacity(0.45) }
+                            .buttonStyle(.plain).accessibilityLabel("Close Files")
+                        files(compact: true)
+                            .frame(width: min(322, geometry.size.width * 0.84))
+                            .shadow(color: .black.opacity(0.25), radius: 8, x: 3)
+                            .transition(.move(edge: .leading))
+                    }
+                }
+            }
+            .foregroundStyle(appearance.color(.text))
+            .background(appearance.color(.background))
+        }
+        #endif
+    }
+
     var rule: some View { Rectangle().fill(appearance.color(.border)).frame(height: 1) }
 
+    #if os(iOS)
     private func toolbar(compact: Bool) -> some View {
         HStack(spacing: 12) {
             Button {
@@ -139,6 +176,7 @@ struct EditorWindow: View {
         .frame(height: 46)
         .background(appearance.color(.surface))
     }
+    #endif
 
     private func icon(_ symbol: String, _ label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: symbol).frame(minWidth: 30, minHeight: 36) }
@@ -183,6 +221,9 @@ struct EditorWindow: View {
                     icon("chevron.right", "Next page") { model.next() }.disabled(model.page.end >= model.size)
                 }
                 Spacer(minLength: 0)
+                #if os(macOS)
+                if model.busy { ProgressView().controlSize(.small) }
+                #endif
                 Text(model.hasPages ? "\(model.page.start.formatted())–\(model.page.end.formatted()) / \(model.size.formatted()) B"
                                     : "\(model.size.formatted()) bytes")
                     .lineLimit(1).font(.caption.monospacedDigit()).foregroundStyle(appearance.color(.muted))
@@ -224,20 +265,20 @@ struct TabStrip: View {
             }
             if history.hasLaterTabs { stripButton(forward: true) }
         }
-        .frame(height: 40)
+        .frame(height: tabHeight)
         .background(appearance.color(.surface))
     }
 
     private func stripButton(forward: Bool) -> some View {
         let label = forward ? "Show next group of tabs" : "Show previous group of tabs"
         return Button { history.shiftStrip(forward: forward) } label: {
-            Image(systemName: forward ? "chevron.right.2" : "chevron.left.2").frame(width: 28, height: 38)
+            Image(systemName: forward ? "chevron.right.2" : "chevron.left.2").frame(width: 28, height: tabHeight - 2)
         }.buttonStyle(.plain).accessibilityLabel(label).help(label)
     }
 
     private func arrow(_ symbol: String, _ label: String, _ visit: Int?) -> some View {
         Button { if let visit { model.navigate(visit: visit) } } label: {
-            Image(systemName: symbol).frame(width: 31, height: 38)
+            Image(systemName: symbol).frame(width: 31, height: tabHeight - 2)
         }
         .buttonStyle(.plain).disabled(visit == nil || model.busy)
         .accessibilityLabel(label).help(label)
@@ -248,7 +289,7 @@ struct TabStrip: View {
             if selected && model.dirty { Circle().fill(appearance.color(.accent)).frame(width: 6, height: 6).accessibilityLabel("Modified") }
             Text(name).lineLimit(1).font(.callout)
         }
-        .padding(.horizontal, 12).frame(height: 40)
+        .padding(.horizontal, 12).frame(height: tabHeight)
         .foregroundStyle(appearance.color(selected ? .text : .muted))
         .background(appearance.color(selected ? .background : .surface))
         .overlay(alignment: .bottom) {

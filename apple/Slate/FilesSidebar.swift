@@ -1,5 +1,12 @@
 import SwiftUI
 
+// Rows sized for the pointer on the Mac and for touch elsewhere.
+#if os(macOS)
+private let treeRowHeight: CGFloat = 24
+#else
+private let treeRowHeight: CGFloat = 37
+#endif
+
 struct FilesSidebar: View {
     @ObservedObject var workspace: WorkspaceModel
     @ObservedObject var model: EditorModel
@@ -14,6 +21,8 @@ struct FilesSidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // On the Mac these commands live in the File menu and the folders' context menus.
+            #if os(iOS)
             HStack {
                 Button { newFile(in: nil) } label: {
                     Label("New File…", systemImage: "doc.badge.plus").font(.callout)
@@ -31,6 +40,7 @@ struct FilesSidebar: View {
                     Label("Show in Folder", systemImage: "folder").font(.callout)
                 }.buttonStyle(.plain).padding(.horizontal, 14).frame(minHeight: 36)
             }
+            #endif
             if !workspace.locations.isEmpty {
                 HStack(spacing: 7) {
                     Image(systemName: "magnifyingglass").foregroundStyle(appearance.color(.muted))
@@ -43,6 +53,9 @@ struct FilesSidebar: View {
                 .padding(.horizontal, 9).frame(minHeight: 34)
                 .background(appearance.color(.background), in: RoundedRectangle(cornerRadius: 5))
                 .padding(.horizontal, 10).padding(.bottom, 8)
+                #if os(macOS)
+                .padding(.top, 8)
+                #endif
                 if !workspace.query.isEmpty {
                     Picker("Search mode", selection: $workspace.contents) {
                         Text("File names").tag(false)
@@ -74,7 +87,13 @@ struct FilesSidebar: View {
                             }
                             if let error = workspace.errors[location.id] { note(error) }
                         }
-                        if workspace.locations.isEmpty { note("Open a folder to browse its files.") }
+                        if workspace.locations.isEmpty {
+                            note("Open a folder to browse its files.")
+                            #if os(macOS)
+                            Button("Open Folder…", action: pickFolder).padding(.horizontal, 14)
+                                .accessibilityIdentifier("files-open-folder")
+                            #endif
+                        }
                         OpenedFiles(history: model.history, select: selectTab, reveal: { tab in
                             showInFolder(model.history.folderHint(for: tab))
                         }, delete: { tab in
@@ -163,7 +182,7 @@ private struct FolderButton: View {
                 Spacer(minLength: 0)
             }
             .padding(.leading, 12 + CGFloat(min(depth, 6)) * 12).padding(.trailing, 8)
-            .frame(minHeight: 37).contentShape(Rectangle())
+            .frame(minHeight: treeRowHeight).contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityLabel(name).accessibilityValue(expanded ? "Expanded" : "Collapsed")
     }
 }
@@ -198,7 +217,7 @@ private struct BranchRows: View {
                             Spacer(minLength: 0)
                         }
                         .padding(.leading, 28 + CGFloat(min(depth, 6)) * 12).padding(.trailing, 8)
-                        .frame(minHeight: 37).contentShape(Rectangle())
+                        .frame(minHeight: treeRowHeight).contentShape(Rectangle())
                         .background(selected ? appearance.color(.accent).opacity(0.18) : Color.clear)
                     }
                     .id(row.url.standardizedFileURL.path)
@@ -245,7 +264,7 @@ private struct OpenedFiles: View {
                 expanded.toggle()
             } label: {
                 Label("Opened files", systemImage: "clock.arrow.circlepath").font(.callout)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).frame(minHeight: 38)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).frame(minHeight: treeRowHeight)
                     .contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityValue(expanded ? "Expanded" : "Collapsed")
             if expanded {
@@ -254,10 +273,10 @@ private struct OpenedFiles: View {
                     HStack(spacing: 4) {
                         Button { select(tab) } label: {
                             Label(tab.name, systemImage: "doc.text").lineLimit(1)
-                                .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 30).frame(minHeight: 36)
+                                .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 30).frame(minHeight: treeRowHeight)
                                 .contentShape(Rectangle())
                         }.buttonStyle(.plain).help(tab.path)
-                        Button { reveal(tab) } label: { Image(systemName: "folder").frame(width: 36, height: 36) }
+                        Button { reveal(tab) } label: { Image(systemName: "folder").frame(width: treeRowHeight, height: treeRowHeight) }
                             .buttonStyle(.plain).accessibilityLabel("Show \(tab.name) in Folder").help("Show in Folder")
                     }
                     .contextMenu {
