@@ -35,7 +35,23 @@ public final class FilesPaneTest extends ActivityInstrumentationTestCase2<MainAc
             if (work.call()) return;
             Thread.sleep(100);
         }
-        fail("Timed out waiting for " + label);
+        AccessibilityNodeInfo root = getInstrumentation().getUiAutomation().getRootInActiveWindow();
+        List<String> labels = new ArrayList<>();
+        if (root != null) {
+            ArrayDeque<AccessibilityNodeInfo> nodes = new ArrayDeque<>();
+            nodes.add(root);
+            while (!nodes.isEmpty() && labels.size() < 40) {
+                AccessibilityNodeInfo n = nodes.removeFirst();
+                if (n.getText() != null) labels.add(n.getText().toString());
+                else if (n.getContentDescription() != null) labels.add(n.getContentDescription().toString());
+                for (int i = 0; i < n.getChildCount(); ++i) {
+                    AccessibilityNodeInfo child = n.getChild(i);
+                    if (child != null) nodes.addLast(child);
+                }
+            }
+        }
+        fail("Timed out waiting for " + label + ". Window: "
+            + (root == null ? "none" : root.getPackageName()) + " " + labels);
     }
 
     private View find(View view, String description) {
@@ -87,11 +103,13 @@ public final class FilesPaneTest extends ActivityInstrumentationTestCase2<MainAc
         });
     }
 
-    private void shell(String command) throws IOException {
+    private String shell(String command) throws IOException {
         ParcelFileDescriptor fd = getInstrumentation().getUiAutomation().executeShellCommand(command);
         try (InputStream in = new ParcelFileDescriptor.AutoCloseInputStream(fd)) {
-            byte[] block = new byte[128];
-            while (in.read(block) >= 0) { /* Wait for completion. */ }
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] block = new byte[256];
+            for (int n; (n = in.read(block)) != -1;) output.write(block, 0, n);
+            return output.toString("UTF-8").trim();
         }
     }
 
@@ -207,8 +225,12 @@ public final class FilesPaneTest extends ActivityInstrumentationTestCase2<MainAc
         String authority = "com.android.externalstorage.documents";
         Uri initial = DocumentsContract.buildDocumentUri(authority, docId);
         Uri grant = DocumentsContract.buildTreeDocumentUri(authority, docId);
-        shell("mkdir -p " + fixture + "/nested");
-        shell("cp /system/etc/hosts " + fixture + "/nested/entry.txt");
+        await("shared storage and the picker fixture", () -> {
+            if (!android.os.Environment.MEDIA_MOUNTED.equals(android.os.Environment.getExternalStorageState())) return false;
+            shell("mkdir -p " + fixture + "/nested");
+            shell("cp /system/etc/hosts " + fixture + "/nested/entry.txt");
+            return shell("cat " + fixture + "/nested/entry.txt").contains("localhost");
+        });
         Instrumentation instrumentation = getInstrumentation();
         Instrumentation.ActivityMonitor monitor = new Instrumentation.ActivityMonitor() {
             @Override public Instrumentation.ActivityResult onStartActivity(Intent intent) {
@@ -227,11 +249,24 @@ public final class FilesPaneTest extends ActivityInstrumentationTestCase2<MainAc
                 root.setLayoutParams(params);
                 return null;
             });
-            waitForView("Files");
+            // The previous test can leave history pointing to a removed fixture.
+            // Let Slate finish restoring that history before interacting with the drawer.
+            await("editor ready for navigation", () -> {
+                AtomicReference<Boolean> ready = new AtomicReference<>(false);
+                instrumentation.runOnMainSync(() -> ready.set(activity.hasWindowFocus()
+                    && view("Files") != null && view("Files").isEnabled()));
+                return ready.get();
+            });
             main(() -> view("Files").performClick());
             waitForView("Open folder");
             assertNotNull(main(() -> view("Open file")));
             main(() -> view("Open folder").performClick());
+            // On a cold device DocumentsUI can briefly display its previous
+            // location before applying EXTRA_INITIAL_URI. Confirm only our fixture.
+            await("picker showing the nested fixture", () -> {
+                AccessibilityNodeInfo window = instrumentation.getUiAutomation().getRootInActiveWindow();
+                return window != null && !window.findAccessibilityNodeInfosByText("nested").isEmpty();
+            });
             pickerButton(":id/action_menu_select", "Use this folder");
             pickerButton("android:id/button1", "Allow");
             waitForView(name + ", expanded folder");
