@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -197,6 +198,37 @@ void conflicts(const fs::path& dir) {
     check(!fs::exists(path), "reject removed destination");
 }
 
+void providerRevisions(const fs::path& dir) {
+    const auto source = dir / "provider-source";
+    const auto output = dir / "provider-copy";
+    writeFile(source, "abcd");
+    timespec times[2] = {{0, UTIME_OMIT}, {1700000000, 100000000}};
+    check(::utimensat(AT_FDCWD, source.c_str(), times, 0) == 0, "set initial modification time");
+
+    Document named, provider;
+    named.open(source);
+    const int fd = ::open(source.c_str(), O_RDONLY);
+    check(fd >= 0, "open provider fixture");
+    provider.open_descriptor(fd, "document.txt");
+    ::close(fd);
+    provider.replace(1, 1, "B");
+    auto worker = provider.snapshot();
+
+    // Give filesystems with a coarse ctime clock a distinct tick for chmod.
+    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    check(::chmod(source.c_str(), 0700) == 0, "change provider metadata");
+    expectError([&] { named.save(source); });
+    worker.save(output);
+    check(contents(output) == "aBcd", "provider metadata change blocked the edited snapshot");
+
+    writeFile(source, "wxyz");
+    times[1].tv_nsec += 100000000; // Same length and mtime seconds, different subsecond revision.
+    check(::utimensat(AT_FDCWD, source.c_str(), times, 0) == 0, "set new modification time");
+    expectError([&] { provider.save(output); });
+    check(provider.dirty() && contents(output) == "aBcd" && contents(source) == "wxyz",
+          "provider conflict must retain unsaved edits and both files");
+}
+
 void concurrentSave(const fs::path& dir) {
     const auto path = dir / "two-writers";
     writeFile(path, "source");
@@ -261,6 +293,7 @@ int main() {
         largePaste(box.path);
         snapshots(box.path);
         conflicts(box.path);
+        providerRevisions(box.path);
         concurrentSave(box.path);
         sparseFile(box.path);
         std::cout << "Document tests passed\n";
