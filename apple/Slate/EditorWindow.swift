@@ -6,6 +6,7 @@ struct EditorWindow: View {
     @ObservedObject var workspace: WorkspaceModel
     let pickFile: () -> Void
     let pickFolder: () -> Void
+    let showInFolder: (ScopedURL) -> Void
     let settings: () -> Void
     @State private var sidebar = true
     @State private var compactBrowser = false
@@ -26,7 +27,7 @@ struct EditorWindow: View {
                             Rectangle().fill(appearance.color(.border)).frame(width: 1)
                         }
                         VStack(spacing: 0) {
-                            TabStrip(history: model.history, model: model, appearance: appearance)
+                            TabStrip(history: model.history, model: model, appearance: appearance, showInFolder: showInFolder)
                             rule
                             if model.preview && model.page.isUTF8 {
                                 PreviewView(content: PreviewContent(model.page, appearance))
@@ -121,6 +122,7 @@ struct EditorWindow: View {
                 Button("Open Folder…", systemImage: "folder") { pickFolder() }
                 Button("Save As…", systemImage: "square.and.arrow.up") { model.needsSaveAs = true }
                 if let file = model.file {
+                    Button("Show in Folder", systemImage: "folder") { showInFolder(file) }.accessibilityIdentifier("current-show-folder")
                     Button("Delete File…", systemImage: "trash", role: .destructive) { model.requestDeletion(file, tabID: model.history.active) }
                         .accessibilityIdentifier("current-delete-file").disabled(model.busy)
                 }
@@ -143,7 +145,7 @@ struct EditorWindow: View {
     }
 
     private func files(compact: Bool) -> some View {
-        FilesSidebar(workspace: workspace, model: model, appearance: appearance, pickFolder: pickFolder,
+        FilesSidebar(workspace: workspace, model: model, appearance: appearance, pickFolder: pickFolder, showInFolder: showInFolder,
                      select: { row, access in
             if compact {
                 if model.file?.url.standardizedFileURL.path == row.url.standardizedFileURL.path {
@@ -192,6 +194,8 @@ struct TabStrip: View {
     @ObservedObject var model: EditorModel
     @ObservedObject var appearance: Appearance
 
+    let showInFolder: (ScopedURL) -> Void
+
     var body: some View {
         HStack(spacing: 0) {
             arrow("chevron.backward", "Go back", history.back)
@@ -204,6 +208,12 @@ struct TabStrip: View {
                         ForEach(history.visibleTabs) { item in
                             Button { model.showTab(item) } label: { tab(item.name, selected: history.active == item.id) }
                                 .id(item.id).buttonStyle(.plain).help(item.path)
+                                .contextMenu {
+                                    Button("Show in Folder") {
+                                        do { showInFolder(try history.acquire(item)) }
+                                        catch { model.errorMessage = error.localizedDescription }
+                                    }
+                                }
                                 .accessibilityIdentifier("document-tab-" + item.name)
                                 .accessibilityAddTraits(history.active == item.id ? .isSelected : [])
                         }

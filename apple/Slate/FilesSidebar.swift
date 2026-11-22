@@ -5,6 +5,7 @@ struct FilesSidebar: View {
     @ObservedObject var model: EditorModel
     @ObservedObject var appearance: Appearance
     let pickFolder: () -> Void
+    let showInFolder: (ScopedURL) -> Void
     let select: (FileRow, ScopedURL) -> Void
     let selectTab: (NavigationHistory.Tab) -> Void
     let created: (URL) -> Void
@@ -25,6 +26,11 @@ struct FilesSidebar: View {
                 .buttonStyle(.plain).accessibilityIdentifier("files-open-folder")
             }
             .padding(.horizontal, 14).frame(minHeight: 44)
+            if let file = model.file, file.parent == nil {
+                Button { showInFolder(file) } label: {
+                    Label("Show in Folder", systemImage: "folder").font(.callout)
+                }.buttonStyle(.plain).padding(.horizontal, 14).frame(minHeight: 36)
+            }
             if !workspace.locations.isEmpty {
                 HStack(spacing: 7) {
                     Image(systemName: "magnifyingglass").foregroundStyle(appearance.color(.muted))
@@ -45,6 +51,7 @@ struct FilesSidebar: View {
                 }
             }
             Rectangle().fill(appearance.color(.border)).frame(height: 1)
+            ScrollViewReader { reader in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if workspace.query.isEmpty {
@@ -68,7 +75,10 @@ struct FilesSidebar: View {
                             if let error = workspace.errors[location.id] { note(error) }
                         }
                         if workspace.locations.isEmpty { note("Open a folder to browse its files.") }
-                        OpenedFiles(history: model.history, select: selectTab, delete: { tab in
+                        OpenedFiles(history: model.history, select: selectTab, reveal: { tab in
+                            do { showInFolder(try model.history.acquire(tab)) }
+                            catch { model.errorMessage = error.localizedDescription }
+                        }, delete: { tab in
                             do { model.requestDeletion(try model.history.acquire(tab), tabID: tab.id) }
                             catch { model.errorMessage = error.localizedDescription }
                         })
@@ -98,6 +108,10 @@ struct FilesSidebar: View {
                         if let message = workspace.message { note(message) }
                     }
                 }.padding(.vertical, 5)
+            }
+            .onChange(of: workspace.folderPicked) {
+                if let file = workspace.revealedFile { reader.scrollTo(file.standardizedFileURL.path, anchor: .center) }
+            }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
@@ -163,7 +177,7 @@ private struct BranchRows: View {
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 0) {
-            ForEach(branch.rows) { row in
+            ForEach(branch.displayedRows) { row in
                 if row.isDirectory {
                     let child = branch.children[row.url]
                     FolderButton(name: row.url.lastPathComponent, expanded: child != nil, appearance: appearance, depth: depth) {
@@ -185,17 +199,29 @@ private struct BranchRows: View {
                         .frame(minHeight: 37).contentShape(Rectangle())
                         .background(selected ? appearance.color(.accent).opacity(0.18) : Color.clear)
                     }
+                    .id(row.url.standardizedFileURL.path)
                     .buttonStyle(.plain).accessibilityLabel(row.url.lastPathComponent)
                     .accessibilityIdentifier("tree-file-" + row.url.lastPathComponent)
                     .accessibilityAddTraits(selected ? .isSelected : [])
                     .contextMenu { Button("Delete File…", role: .destructive) { delete(ScopedURL(row.url, parent: branch.access)) } }
                 }
             }
-            if branch.busy { ProgressView().controlSize(.small).padding(.leading, 32) }
-            else if branch.more { Button("Load more files") { branch.loadMore() }.padding(.leading, 32) }
-            else if let error = branch.error {
+            if branch.busy {
+                ProgressView().controlSize(.small).padding(.leading, 32)
+            } else if branch.pageIndex > 0 || branch.more {
+                HStack {
+                    Button { branch.previous() } label: { Image(systemName: "chevron.left") }
+                        .disabled(branch.pageIndex == 0).accessibilityLabel("Previous files")
+                    let first = branch.pageIndex * DirectoryCursor.pageSize + 1
+                    Text("\(first)–\(first + branch.rows.count - 1)" + (branch.count.map { " / \($0)" } ?? ""))
+                        .font(.caption.monospacedDigit())
+                    Button { branch.loadMore() } label: { Image(systemName: "chevron.right") }
+                        .disabled(!branch.more).accessibilityLabel("Next files")
+                }.padding(.leading, 30).frame(minHeight: 40)
+            }
+            if let error = branch.error {
                 Text(error).font(.footnote).foregroundStyle(appearance.color(.muted)).padding(.horizontal, 20)
-            } else if branch.rows.isEmpty {
+            } else if !branch.busy && branch.rows.isEmpty {
                 Text("Empty folder").font(.footnote).foregroundStyle(appearance.color(.muted)).padding(.leading, 40)
             }
         }
@@ -205,6 +231,7 @@ private struct BranchRows: View {
 private struct OpenedFiles: View {
     @ObservedObject var history: NavigationHistory
     let select: (NavigationHistory.Tab) -> Void
+    let reveal: (NavigationHistory.Tab) -> Void
     let delete: (NavigationHistory.Tab) -> Void
     @State private var expanded = false
     @State private var oldest = Int.max
@@ -222,12 +249,19 @@ private struct OpenedFiles: View {
             if expanded {
                 let page = history.openedFiles(endingAt: oldest)
                 ForEach(page) { tab in
-                    Button { select(tab) } label: {
-                        Label(tab.name, systemImage: "doc.text").lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 30).frame(minHeight: 36)
-                            .contentShape(Rectangle())
-                    }.buttonStyle(.plain).help(tab.path)
-                    .contextMenu { Button("Delete File…", role: .destructive) { delete(tab) } }
+                    HStack(spacing: 4) {
+                        Button { select(tab) } label: {
+                            Label(tab.name, systemImage: "doc.text").lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 30).frame(minHeight: 36)
+                                .contentShape(Rectangle())
+                        }.buttonStyle(.plain).help(tab.path)
+                        Button { reveal(tab) } label: { Image(systemName: "folder").frame(width: 36, height: 36) }
+                            .buttonStyle(.plain).accessibilityLabel("Show \(tab.name) in Folder").help("Show in Folder")
+                    }
+                    .contextMenu {
+                        Button("Show in Folder") { reveal(tab) }
+                        Button("Delete File…", role: .destructive) { delete(tab) }
+                    }
                 }
                 let earlier = page.last.flatMap { history.tabPage(starting: $0.id - 1, backward: true, limit: 1).first }
                 let later = page.first.flatMap { history.tabPage(starting: $0.id + 1).last }

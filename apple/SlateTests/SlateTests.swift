@@ -201,7 +201,11 @@ final class SlateTests: XCTestCase {
         XCTAssertTrue(files.more)
         files.loadMore()
         try await waitUntil { !files.busy }
-        XCTAssertEqual(files.rows.count, 150)
+        XCTAssertEqual(files.rows.count, 22)
+        XCTAssertEqual(files.count, 150)
+        files.previous()
+        try await waitUntil { !files.busy }
+        XCTAssertEqual(files.rows.count, 128)
         restored.query = "note-149"
         try await waitUntil { !restored.searching }
         let hit = try XCTUnwrap(restored.hits.first)
@@ -217,6 +221,87 @@ final class SlateTests: XCTestCase {
         restored.forget(location)
         let reopened = WorkspaceModel(defaults: defaults, documents: local)
         XCTAssertEqual(reopened.locations.map(\.title), ["Slate Documents", "Second"])
+    }
+
+    @MainActor
+    func testLargeDirectoryMetadataPagesAndMixedMediaSearch() async throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("Work Bench Audio")
+        let nested = root.appendingPathComponent("Nested")
+        let db = base.appendingPathComponent("names.sqlite")
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+        for n in 0..<2048 {
+            let ext = n % 3 == 0 ? "wav" : "txt"
+            try Data().write(to: root.appendingPathComponent("take-\(n).\(ext)"))
+        }
+        let term = "transcript needle"
+        try Data(term.utf8).write(to: nested.appendingPathComponent("ignored.WAV"))
+        try (Data([0]) + Data(term.utf8)).write(to: nested.appendingPathComponent("opaque"))
+        try Data(("line " + term).utf8).write(to: nested.appendingPathComponent("notes.txt"))
+        let access = ScopedURL(root)
+        let cold = DirectoryCursor(url: root, access: access, database: db)
+        let first = try cold.page(0)
+        XCTAssertEqual(first.count, 128)
+        XCTAssertNil(cold.count)
+        XCTAssertEqual(cold.scanned, 128)
+        while cold.count == nil { try cold.warm() }
+        XCTAssertEqual(cold.count, 2049)
+        let warm = DirectoryCursor(url: root, access: access, database: db)
+        XCTAssertEqual(try warm.page(0).map(\.id), first.map(\.id))
+        XCTAssertTrue(warm.cached)
+        XCTAssertEqual(try warm.page(15).count, 128)
+        XCTAssertEqual(try warm.page(16).count, 1)
+        XCTAssertEqual(warm.scanned, 0)
+
+        let model = WorkspaceModel(documents: root, database: db)
+        model.query = "nested/igno"
+        try await waitUntil { !model.searching }
+        XCTAssertEqual(model.hits.map { $0.url.lastPathComponent }, ["ignored.WAV"])
+        model.contents = true
+        model.query = term
+        try await waitUntil { !model.searching }
+        XCTAssertEqual(model.hits.map { $0.url.lastPathComponent }, ["notes.txt"])
+        XCTAssertEqual(model.hits.first?.offset, 5)
+
+        try fm.removeItem(at: root.appendingPathComponent("take-0.wav"))
+        let updated = DirectoryCursor(url: root, access: access, database: db)
+        _ = try updated.page(0)
+        XCTAssertFalse(updated.cached)
+        while updated.count == nil { try updated.warm() }
+        XCTAssertEqual(updated.count, 2048)
+        try fm.moveItem(at: root, to: base.appendingPathComponent("Moved"))
+        XCTAssertThrowsError(try DirectoryCursor(url: root, access: access, database: db).page(0))
+    }
+
+    @MainActor
+    func testShowInFolderUsesOnlyGrantedParentsAndRevealsTheNestedFile() async throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("Work Bench Audio")
+        let nested = root.appendingPathComponent("Nested")
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+        let file = ScopedURL(nested.appendingPathComponent("transcript.txt"))
+        try Data().write(to: file.url)
+        let workspace = WorkspaceModel()
+        var requested: URL?
+        workspace.showInFolder(file) { requested = $0 }
+        try await waitUntil { requested != nil }
+        XCTAssertEqual(requested?.standardizedFileURL.path, nested.standardizedFileURL.path)
+        XCTAssertTrue(workspace.locations.isEmpty)
+        workspace.open(folder: root)
+        let location = try XCTUnwrap(workspace.locations.first)
+        workspace.showInFolder(file) { _ in XCTFail("The previously granted root covers this file.") }
+        try await waitUntil { workspace.revealedFile == file.url }
+        let parent = try XCTUnwrap(workspace.expanded[location.id]?.children.values.first)
+        XCTAssertEqual(parent.displayedRows.first?.url.lastPathComponent, "transcript.txt")
+        workspace.forget(location)
+        requested = nil
+        workspace.showInFolder(file) { requested = $0 }
+        try await waitUntil { requested != nil }
+        XCTAssertTrue(workspace.locations.isEmpty)
     }
 
     func testExclusiveCreationAndDeletionOnlyOfUnchangedRegularFiles() throws {

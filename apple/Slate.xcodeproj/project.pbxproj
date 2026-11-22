@@ -88,6 +88,13 @@
 			path = "Slate/WorkspaceSearch.cpp";
 			sourceTree = SOURCE_ROOT;
 		};
+		D7B904A5D7B904A5D7B904A5 /* DirectoryIndex.cpp */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.cpp.cpp;
+			name = "DirectoryIndex.cpp";
+			path = "Slate/DirectoryIndex.cpp";
+			sourceTree = SOURCE_ROOT;
+		};
 		09F60F624BB3AAC5748DA2CA /* document.cpp */ = {
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.cpp.cpp;
@@ -156,6 +163,13 @@
 			lastKnownFileType = sourcecode.c.h;
 			name = "WorkspaceSearch.h";
 			path = "Slate/WorkspaceSearch.h";
+			sourceTree = SOURCE_ROOT;
+		};
+		A7B904A5D7B904A5D7B904A5 /* DirectoryIndex.h */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.c.h;
+			name = "DirectoryIndex.h";
+			path = "Slate/DirectoryIndex.h";
 			sourceTree = SOURCE_ROOT;
 		};
 		73E4B9F2E87B8F46D4E690D7 /* Slate-Bridging-Header.h */ = {
@@ -241,6 +255,10 @@
 			isa = PBXBuildFile;
 			fileRef = E2BD89A8CFE8728EC6498E02 /* WorkspaceSearch.cpp */;
 		};
+		C7B904A5D7B904A5D7B904A5 /* DirectoryIndex.cpp (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = D7B904A5D7B904A5D7B904A5 /* DirectoryIndex.cpp */;
+		};
 		56372D7AC320345087408DAA /* document.cpp (build) */ = {
 			isa = PBXBuildFile;
 			fileRef = 09F60F624BB3AAC5748DA2CA /* document.cpp */;
@@ -294,10 +312,12 @@
 				3F5A343B2E944DC3FC860ED1 /* SourceView.swift */,
 				B3EEA529A14C0518C79602B8 /* Workspace.swift */,
 				E2BD89A8CFE8728EC6498E02 /* WorkspaceSearch.cpp */,
+				D7B904A5D7B904A5D7B904A5 /* DirectoryIndex.cpp */,
 				01FA6D476D346406C6FF393E /* Assets.xcassets */,
 				8407F462D0288F2B01904B8E /* Info.plist */,
 				7DBFB0DAB2C1B5542EE13FDF /* Slate.entitlements */,
 				D9B7346B2C5AAD67B839D0CA /* WorkspaceSearch.h */,
+				A7B904A5D7B904A5D7B904A5 /* DirectoryIndex.h */,
 				73E4B9F2E87B8F46D4E690D7 /* Slate-Bridging-Header.h */,
 			);
 			name = Slate;
@@ -342,6 +362,7 @@
 				82FAB6AD3ADF387D77DA58DF /* SourceView.swift (build) */,
 				F0732F1C2F9934E07E064BD0 /* Workspace.swift (build) */,
 				DB6C34A6858DC7DDD62FCD4B /* WorkspaceSearch.cpp (build) */,
+				C7B904A5D7B904A5D7B904A5 /* DirectoryIndex.cpp (build) */,
 				56372D7AC320345087408DAA /* document.cpp (build) */,
 				63863DD95B1FE9C08CE70DB6 /* search.cpp (build) */,
 				C394ED58E38BADD4976A62B7 /* slate_document.cpp (build) */,
