@@ -140,6 +140,11 @@ void run() {
     wait_until([&] { return gtk_adjustment_get_upper(horizontal) > gtk_adjustment_get_page_size(horizontal) + 100; },
                "wide table should scroll horizontally");
 
+    show("| العربية | Middle | الرقم |\n| :--- | :---: | ---: |\n| مدينة | Plain | 123 |\n");
+    const auto arabic = geometry(view, "مدينة"), middle = geometry(view, "Plain"), number = geometry(view, "123");
+    check(arabic.x < middle.x && middle.x < number.x && arabic.y == number.y,
+          "right-to-left cell text keeps the Markdown column order");
+
     gtk_widget_destroy(window);
 }
 } // namespace

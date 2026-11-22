@@ -249,6 +249,13 @@ std::size_t utf8_prefix(std::string_view text, std::size_t limit) {
     return length;
 }
 
+bool starts_right_to_left(std::string_view text) {
+    if (std::none_of(text.begin(), text.end(), [](unsigned char c) { return c >= 128; })) return false;
+    G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+    return pango_find_base_dir(text.data(), static_cast<int>(text.size())) == PANGO_DIRECTION_RTL;
+    G_GNUC_END_IGNORE_DEPRECATIONS
+}
+
 // Match the table's GtkTextTag typography on the worker. Reuse one layout
 // for width measurement and cell wrapping, with no GTK widget per cell.
 class TableText {
@@ -508,7 +515,7 @@ struct Formatter {
                             width -= table_text.width(source.substr(s.begin, alt_end - s.begin), s.begin, k, model, i == start);
                     }
                 }
-                width += image_width + 2; // Rounding slack for different GTK/Pango pixel contexts.
+                width = std::max(0, width) + image_width + 2; // GTK/Pango rounding slack.
                 preferred[col] = std::max(preferred[col], width);
                 if (image_width) minimum[col] = std::max(minimum[col], width);
                 measured.push_back({width, span, image_width != 0, long_text});
@@ -602,6 +609,10 @@ struct Formatter {
                 table_limit = true;
                 return end - 1;
             }
+            // Keep Markdown column order when a row's first strong character
+            // is RTL. Pango still applies bidirectional shaping inside cells.
+            if (starts_right_to_left(source.substr(row.begin, row.end - row.begin)))
+                run("\xe2\x80\x8e", none, base, none); // LRM.
             for (std::size_t line = 0; line < height; ++line) {
                 for (unsigned j = 0; j < cells.size(); ++j) {
                     run(j ? "\t│\t" : "\t", none, base, none);

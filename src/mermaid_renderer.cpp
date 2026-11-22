@@ -171,10 +171,10 @@ Output run_renderer(const std::string& executable, std::string_view source,
             output.status = output.png.empty() ? MermaidStatus::Invalid : MermaidStatus::Ready;
             return output;
         }
-        if (output.png.size() + count > max_output) return {};
+        if (output.png.size() + count > max_output) return {{}, MermaidStatus::Invalid};
         output.png.insert(output.png.end(), buffer.data(), buffer.data() + count);
     }
-    return {};
+    return {{}, MermaidStatus::Invalid};
 }
 
 MermaidImage decode_png(const std::vector<guint8>& bytes) {
@@ -225,7 +225,7 @@ MermaidResult MermaidRenderer::render(std::string_view source, const std::functi
     MermaidResult result{{}, output.status};
     if (output.status == MermaidStatus::Ready) {
         result.image = decode_png(output.png);
-        if (!result.image) return {};
+        if (!result.image) return {{}, MermaidStatus::Invalid};
     } else if (output.status != MermaidStatus::Invalid) return result;
     auto size = source.size();
     if (result.image) size += gdk_pixbuf_get_byte_length(result.image.get());
