@@ -34,7 +34,7 @@ void wait_until(Predicate predicate, const char* message) {
 }
 
 struct Geometry {
-    int x, y, right;
+    int x, y, right, bottom;
     int center() const { return (x + right) / 2; }
 };
 
@@ -51,7 +51,8 @@ Geometry geometry(GtkTextView* view, const char* word) {
     GdkRectangle a{}, b{};
     gtk_text_view_get_iter_location(view, &first, &a);
     gtk_text_view_get_iter_location(view, &end, &b);
-    return {a.x, a.y, b.x + b.width};
+    return {std::min({a.x, a.x + a.width, b.x, b.x + b.width}), std::min(a.y, b.y),
+            std::max({a.x, a.x + a.width, b.x, b.x + b.width}), std::max(a.y + a.height, b.y + b.height)};
 }
 
 void tagged(GtkTextView* view, const char* word, const char* style) {
@@ -142,8 +143,15 @@ void run() {
 
     show("| العربية | Middle | الرقم |\n| :--- | :---: | ---: |\n| مدينة | Plain | 123 |\n");
     const auto arabic = geometry(view, "مدينة"), middle = geometry(view, "Plain"), number = geometry(view, "123");
-    check(arabic.x < middle.x && middle.x < number.x && arabic.y == number.y,
-          "right-to-left cell text keeps the Markdown column order");
+    // Fallback fonts can have different ascents while sharing the same baseline.
+    const bool same_row = std::max({arabic.y, middle.y, number.y}) <
+                          std::min({arabic.bottom, middle.bottom, number.bottom});
+    if (!(arabic.right <= middle.x && middle.right <= number.x && same_row)) {
+        for (const auto& cell : {arabic, middle, number})
+            std::cerr << "cell bounds (" << cell.x << ", " << cell.y << ") to ("
+                      << cell.right << ", " << cell.bottom << ")\n";
+        throw std::runtime_error("right-to-left cell text keeps the Markdown column order");
+    }
 
     gtk_widget_destroy(window);
 }
