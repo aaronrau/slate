@@ -55,6 +55,7 @@ struct EditorWindow: View {
         }
         .onChange(of: workspace.folderPicked) { sidebar = true; compactBrowser = true }
         .onChange(of: model.file?.url) { _, url in
+            workspace.clearReveal()
             workspace.includeGrant(for: model.file)
             if let url, pendingSelection?.standardizedFileURL.path == url.standardizedFileURL.path {
                 compactBrowser = false
@@ -147,6 +148,7 @@ struct EditorWindow: View {
     private func files(compact: Bool) -> some View {
         FilesSidebar(workspace: workspace, model: model, appearance: appearance, pickFolder: pickFolder, showInFolder: showInFolder,
                      select: { row, access in
+            workspace.clearReveal()
             if compact {
                 if model.file?.url.standardizedFileURL.path == row.url.standardizedFileURL.path {
                     compactBrowser = false

@@ -55,7 +55,7 @@ struct FilesSidebar: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if workspace.query.isEmpty {
-                        ForEach(workspace.locations) { location in
+                        ForEach(workspace.sidebarLocations) { location in
                             let branch = workspace.expanded[location.id]
                             FolderButton(name: location.title, expanded: branch != nil, appearance: appearance) {
                                 workspace.toggle(location)
@@ -108,6 +108,9 @@ struct FilesSidebar: View {
                     }
                 }.padding(.vertical, 5)
             }
+            .onAppear {
+                if let file = workspace.revealedFile { reader.scrollTo(file.standardizedFileURL.path, anchor: .center) }
+            }
             .onChange(of: workspace.folderPicked) {
                 if let file = workspace.revealedFile { reader.scrollTo(file.standardizedFileURL.path, anchor: .center) }
             }
@@ -138,7 +141,7 @@ struct FilesSidebar: View {
         }
     }
 
-    private var selected: String? { model.file?.url.standardizedFileURL.path }
+    private var selected: String? { (workspace.revealedFile ?? model.file?.url)?.standardizedFileURL.path }
     private func note(_ text: String) -> some View {
         Text(text).font(.footnote).foregroundStyle(appearance.color(.muted)).padding(.horizontal, 14).padding(.vertical, 7)
     }

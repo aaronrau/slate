@@ -256,6 +256,15 @@ final class WorkspaceModel: ObservableObject {
     @Published private(set) var errors: [UUID: String] = [:]
     @Published private(set) var folderPicked = 0
     @Published private(set) var revealedFile: URL?
+    private var revealedLocation: UUID?
+    var sidebarLocations: [FolderLocation] {
+        guard let root = locations.first(where: { $0.id == revealedLocation }) else { return locations }
+        return [root] + locations.filter { $0.id != root.id }
+    }
+    func clearReveal() {
+        revealedLocation = nil
+        revealedFile = nil
+    }
     @Published var query = "" { didSet { if oldValue != query { search() } } }
     @Published var contents = false { didSet { if oldValue != contents { search() } } }
     @Published private(set) var hits: [FileRow] = []
@@ -300,6 +309,7 @@ final class WorkspaceModel: ObservableObject {
     }
 
     func open(folder: URL) {
+        clearReveal()
         let access = ScopedURL(folder)
         forgottenGrants.remove(folder.standardizedFileURL.path)
         let existing = locations.firstIndex { $0.reference.url.standardizedFileURL.path == folder.standardizedFileURL.path }
@@ -351,6 +361,7 @@ final class WorkspaceModel: ObservableObject {
                     self.query = ""
                     if self.expanded[id] == nil || self.expanded[id]?.error != nil { self.expand(location, access: grant) }
                     self.expanded[id]?.reveal(path[...])
+                    self.revealedLocation = id
                     self.revealedFile = fileURL
                     self.folderPicked += 1
                 } else { chooseFolder(fileURL.deletingLastPathComponent()) }
@@ -381,6 +392,7 @@ final class WorkspaceModel: ObservableObject {
 
     func forget(_ location: FolderLocation) {
         guard !location.local else { return }
+        if location.id == revealedLocation { clearReveal() }
         forgottenGrants.insert(location.reference.url.standardizedFileURL.path)
         if let database {
             let path = expanded[location.id]?.url.path ?? location.reference.url.path

@@ -291,10 +291,15 @@ final class SlateTests: XCTestCase {
         try await waitUntil { requested != nil }
         XCTAssertEqual(requested?.standardizedFileURL.path, nested.standardizedFileURL.path)
         XCTAssertTrue(workspace.locations.isEmpty)
+        let other = base.appendingPathComponent("Other")
+        try fm.createDirectory(at: other, withIntermediateDirectories: false)
+        workspace.open(folder: other)
         workspace.open(folder: root)
-        let location = try XCTUnwrap(workspace.locations.first)
+        let location = try XCTUnwrap(workspace.locations.first(where: { $0.title == "Work Bench Audio" }))
+        XCTAssertEqual(workspace.sidebarLocations.first?.title, "Other")
         workspace.showInFolder(file) { _ in XCTFail("The previously granted root covers this file.") }
         try await waitUntil { workspace.revealedFile == file.url }
+        XCTAssertEqual(workspace.sidebarLocations.first?.id, location.id)
         let parent = try XCTUnwrap(workspace.expanded[location.id]?.children.values.first)
         XCTAssertEqual(parent.displayedRows.first?.url.lastPathComponent, "transcript.txt")
         workspace.forget(location)
@@ -302,7 +307,7 @@ final class SlateTests: XCTestCase {
         let formerGrant = ScopedURL(file.url, parent: ScopedURL(root))
         workspace.showInFolder(formerGrant) { requested = $0 }
         try await waitUntil { requested != nil }
-        XCTAssertTrue(workspace.locations.isEmpty)
+        XCTAssertEqual(workspace.sidebarLocations.map(\.title), ["Other"])
     }
 
     func testExclusiveCreationAndDeletionOnlyOfUnchangedRegularFiles() throws {
