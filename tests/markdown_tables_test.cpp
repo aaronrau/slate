@@ -199,6 +199,11 @@ void run() {
     check(escaped.y == tail.y && tail.right < geometry(view, "intact").x,
           "embedded Unicode separators stay inside their cell");
 
+    show("| Run | Column |\n| --- | --- |\n"
+         "| iiiiiiiiiiiiiiiiii | Ordinary |\n| `iiiiiiiiiiiiiiiiii` | Monospaced |\n");
+    check(geometry(view, "Ordinary").x == geometry(view, "Monospaced").x,
+          "identical text in proportional and code fonts uses the extent of the wider style");
+
     std::string header = "|", rule = "|", row = "|";
     for (int i = 0; i < 16; ++i) {
         header += " Column" + std::to_string(i) + " |";

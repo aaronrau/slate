@@ -261,12 +261,41 @@ bool starts_right_to_left(std::string_view text) {
 
 // Match the table's GtkTextTag typography on the worker. Reuse one layout
 // for width measurement and cell wrapping, with no GTK widget per cell.
+struct CellSlice { unsigned begin, end; };
+
 class TableText {
     std::unique_ptr<PangoLayout, decltype(&g_object_unref)> layout_{nullptr, g_object_unref};
-    std::unordered_map<std::string_view, int> plain_widths_[2];
+    using StyleRange = std::array<unsigned, 3>;
+    struct Metrics {
+        std::vector<StyleRange> styles;
+        int natural = -1, wrapped = -1;
+        std::vector<CellSlice> lines;
+    };
+    std::unordered_map<std::string_view, Metrics> cache_[2];
+    std::vector<StyleRange> styles_;
     std::string normalized_;
     double dpi_;
     bool heading_ = false;
+
+    // Repeated labels and formatted descriptions are common in large tables.
+    // Compare the exact shaping attributes as well as the text, so identical
+    // words with different emphasis or code fonts keep their own metrics.
+    Metrics* metrics(std::string_view text, unsigned begin, unsigned span, const MarkdownModel& model, bool heading) {
+        if (text.size() > 384) return nullptr;
+        auto& cache = cache_[heading];
+        auto found = cache.find(text);
+        if (found == cache.end() && cache.size() >= 512) return nullptr;
+        styles_.clear();
+        const unsigned end = begin + text.size();
+        for (; span < model.spans.size() && model.spans[span].begin < end; ++span) {
+            const auto& s = model.spans[span];
+            const auto style = s.style & (MdStrong | MdEmphasis | MdCode | MdImage);
+            if (style && s.end > begin)
+                styles_.push_back({std::max(s.begin, begin) - begin, std::min(s.end, end) - begin, style});
+        }
+        if (found == cache.end()) return &cache.emplace(text, Metrics{styles_}).first->second;
+        return found->second.styles == styles_ ? &found->second : nullptr;
+    }
 
 public:
     explicit TableText(double dpi) : dpi_(dpi) {}
@@ -315,14 +344,30 @@ public:
 
     int width(std::string_view text, unsigned begin, unsigned span, const MarkdownModel& model, bool heading) {
         if (text.empty()) return 0;
-        const bool plain = text.size() <= 96 && (span == model.spans.size() ||
-                           model.spans[span].begin >= begin + text.size());
-        auto& cache = plain_widths_[heading];
-        if (plain) if (auto it = cache.find(text); it != cache.end()) return it->second;
+        auto* cached = metrics(text, begin, span, model, heading);
+        if (cached && cached->natural >= 0) return cached->natural;
         int width = 0;
         pango_layout_get_pixel_size(layout(text, begin, span, model, -1, heading), &width, nullptr);
-        if (plain && cache.size() < 256) cache.emplace(text, width);
+        if (cached) cached->natural = width;
         return width;
+    }
+
+    void wrap(std::string_view text, unsigned begin, unsigned span, const MarkdownModel& model,
+              int width, bool heading, std::vector<CellSlice>& slices) {
+        auto* cached = metrics(text, begin, span, model, heading);
+        if (cached && cached->wrapped == width) {
+            for (const auto& line : cached->lines) slices.push_back({begin + line.begin, begin + line.end});
+            return;
+        }
+        if (cached) { cached->wrapped = width; cached->lines.clear(); }
+        auto* shaped = layout(text, begin, span, model, width, heading);
+        for (auto* list = pango_layout_get_lines_readonly(shaped); list; list = list->next) {
+            auto* line = static_cast<const PangoLayoutLine*>(list->data);
+            const auto first = static_cast<unsigned>(line->start_index);
+            const auto last = first + static_cast<unsigned>(line->length);
+            slices.push_back({begin + first, begin + last});
+            if (cached) cached->lines.push_back({first, last});
+        }
     }
 };
 
@@ -536,9 +581,8 @@ struct Formatter {
 
         // A row has as many display lines as its tallest cell. Each display
         // line uses the same native tab stops and keeps inline tags and links.
-        struct Slice { unsigned begin, end; };
         struct CellLines { std::size_t first, count; unsigned span; };
-        std::vector<Slice> slices;
+        std::vector<CellSlice> slices;
         std::vector<CellLines> cells;
         cells.reserve(columns);
         for (auto i = start; i < end; ++i) {
@@ -568,13 +612,8 @@ struct Formatter {
                             auto remaining = source.substr(offset, end - offset);
                             const auto length = utf8_prefix(remaining, 4096);
                             while (span < row.span_end && model.spans[span].end <= offset) ++span;
-                            auto* layout = table_text.layout(remaining.substr(0, length), offset, span, model,
-                                                            width - 2, i == start);
-                            for (auto* list = pango_layout_get_lines_readonly(layout); list; list = list->next) {
-                                auto* line = static_cast<const PangoLayoutLine*>(list->data);
-                                const auto first = offset + static_cast<unsigned>(line->start_index);
-                                slices.push_back({first, first + static_cast<unsigned>(line->length)});
-                            }
+                            table_text.wrap(remaining.substr(0, length), offset, span, model,
+                                            width - 2, i == start, slices);
                             offset += length;
                         }
                     };
@@ -1219,17 +1258,18 @@ struct MarkdownPreview::Impl {
         auto* text = GTK_TEXT_VIEW(view);
         double x1, y1, x2, y2;
         cairo_clip_extents(cr, &x1, &y1, &x2, &y2);
-        GtkTextIter top;
+        GtkTextIter top, bottom;
         gtk_text_view_get_line_at_y(text, &top, static_cast<int>(y1), nullptr);
+        gtk_text_view_get_line_at_y(text, &bottom, static_cast<int>(y2), nullptr);
         const auto& rows = page->table_rows;
         auto row = std::lower_bound(rows.begin(), rows.end(), gtk_text_iter_get_offset(&top),
             [](const TableRow& candidate, int pos) { return candidate.end <= pos; });
-        const int inserted = gtk_text_buffer_get_char_count(buffer());
+        const int visible_end = gtk_text_iter_get_offset(&bottom) + gtk_text_iter_get_chars_in_line(&bottom);
         GdkRGBA header, stripe, border;
         gdk_rgba_parse(&header, palette.raised.c_str());
         gdk_rgba_parse(&stripe, palette.surface.c_str());
         gdk_rgba_parse(&border, palette.border.c_str());
-        for (; row != rows.end() && row->begin < inserted; ++row) {
+        for (; row != rows.end() && row->begin < visible_end; ++row) {
             GtkTextIter begin;
             gtk_text_buffer_get_iter_at_offset(buffer(), &begin, row->begin);
             int y = 0, height = 0;

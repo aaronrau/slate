@@ -16,6 +16,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fcntl.h>
+#include <initializer_list>
 #include <list>
 #include <optional>
 #include <poll.h>
@@ -120,6 +121,12 @@ struct Output {
     MermaidStatus status = MermaidStatus::Unavailable;
 };
 
+bool same_diagram_colors(const Palette& a, const Palette& b) {
+    return a.dark == b.dark && a.background == b.background && a.surface == b.surface &&
+           a.raised == b.raised && a.selection == b.selection && a.text == b.text &&
+           a.accent == b.accent && a.muted == b.muted;
+}
+
 // Merman's editor presets paint their own full-canvas background. Its native
 // Mermaid variables color the diagram while leaving the PNG canvas transparent.
 std::string diagram_config(const Palette& p) {
@@ -156,7 +163,7 @@ struct ConfigFile {
     ~ConfigFile() { if (path) unlink(path.get()); }
 
     bool apply(const Palette& p) {
-        if (palette && *palette == p) return true;
+        if (palette && same_diagram_colors(*palette, p)) return true;
         if (!path) {
             char* name = nullptr;
             const auto fd = g_file_open_tmp("slate-mermaid-XXXXXX", &name, nullptr);
@@ -165,6 +172,7 @@ struct ConfigFile {
             path.reset(name);
         }
         const auto data = diagram_config(p);
+        palette.reset();
         if (!g_file_set_contents_full(path.get(), data.c_str(), data.size(), G_FILE_SET_CONTENTS_NONE,
                                       0600, nullptr)) return false;
         palette = p;
@@ -266,7 +274,7 @@ MermaidResult MermaidRenderer::render(std::string_view source, const Palette& pa
     if (source.empty() || source.size() > max_mermaid_source) return {{}, MermaidStatus::Invalid};
     auto& state = *impl_;
     const auto hit = std::find_if(state.cache.begin(), state.cache.end(), [&](const auto& entry) {
-        return entry.source == source && entry.palette == palette;
+        return entry.source == source && same_diagram_colors(entry.palette, palette);
     });
     if (hit != state.cache.end()) {
         state.cache.splice(state.cache.begin(), state.cache, hit);

@@ -1,6 +1,7 @@
 #include "mermaid_renderer.hpp"
 #include "theme.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -89,6 +90,9 @@ int main() {
             check(gdk_pixbuf_get_height(seq.image.get()) > gdk_pixbuf_get_height(flow.image.get()),
                   "sequence diagram reused flowchart crop");
             check(renderer.render(flowchart, palette, running).image == flow.image, "cache missed identical palette");
+            auto code_change = palette;
+            code_change.code_text = "#ffaa33";
+            check(renderer.render(flowchart, code_change, running).image == flow.image, "code color evicted diagram");
         }
         dark.text = "#fff2d8";
         dark.muted = "#a4c9df";
