@@ -591,7 +591,7 @@ public final class MainActivity extends Activity {
         startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
             .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), OPEN);
     }
-    void pickFolder() { if (!busy) startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), FOLDER); }
+    void pickFolder() { startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), FOLDER); }
 
     private void persist(Uri uri, Intent data) {
         int granted = data.getFlags();
