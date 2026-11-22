@@ -5,9 +5,12 @@ struct PreviewContent: Equatable {
     let markdown: String
     let dark: Bool
     let colors: [String: String]
-    init(_ page: TextPage, _ palette: Appearance) {
+    // The base text size in CSS pixels; nil keeps the stylesheet's 1rem.
+    let fontSize: Double?
+    init(_ page: TextPage, _ palette: Appearance, fontSize: Double? = nil) {
         markdown = page.text
         dark = palette.dark
+        self.fontSize = fontSize
         colors = Dictionary(uniqueKeysWithValues: Ink.allCases.map { ($0.rawValue, palette.hex($0)) })
     }
 }
@@ -53,6 +56,7 @@ final class PreviewController: NSObject, WKNavigationDelegate {
         displayed = pending
         var palette: [String: Any] = pending.colors
         palette["dark"] = pending.dark
+        if let fontSize = pending.fontSize { palette["fontSize"] = fontSize }
         view.callAsyncJavaScript("await window.slatePreview.render(markdown, palette); return true;",
                                  arguments: ["markdown": pending.markdown, "palette": palette],
                                  in: nil, in: .page, completionHandler: nil)

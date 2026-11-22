@@ -3,9 +3,16 @@ import SwiftUI
 // Rows sized for the pointer on the Mac and for touch elsewhere.
 #if os(macOS)
 private let treeRowHeight: CGFloat = 24
+private let hitPadding = EdgeInsets(top: 5, leading: 12, bottom: 5, trailing: 10)
+private let hitSpacing: CGFloat = 2
 #else
 private let treeRowHeight: CGFloat = 37
+private let hitPadding = EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10)
+private let hitSpacing: CGFloat = 3
 #endif
+
+// The leading inset of a file row, so its icon lines up with a folder's icon at the same depth.
+private func fileIndent(_ depth: Int) -> CGFloat { 28 + CGFloat(min(depth, 6)) * 12 }
 
 struct FilesSidebar: View {
     @ObservedObject var workspace: WorkspaceModel
@@ -42,6 +49,21 @@ struct FilesSidebar: View {
             }
             #endif
             if !workspace.locations.isEmpty {
+                #if os(macOS)
+                // Sized like a native sidebar search field: 13 pt text in a 24 pt rounded box.
+                HStack(spacing: 5) {
+                    Image(systemName: "magnifyingglass").font(.chromeIcon).foregroundStyle(appearance.color(.muted))
+                    TextField("Search files", text: $workspace.query).textFieldStyle(.plain).font(.chromeRow)
+                    if !workspace.query.isEmpty {
+                        Button { workspace.query = "" } label: { Image(systemName: "xmark.circle.fill").font(.chromeIcon) }
+                            .buttonStyle(.plain).foregroundStyle(appearance.color(.muted)).accessibilityLabel("Clear search")
+                    }
+                }
+                .padding(.horizontal, 7).frame(height: 24)
+                .background(appearance.color(.background), in: RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(appearance.color(.border), lineWidth: 1))
+                .padding(.horizontal, 10).padding(.vertical, 8)
+                #else
                 HStack(spacing: 7) {
                     Image(systemName: "magnifyingglass").foregroundStyle(appearance.color(.muted))
                     TextField("Search files", text: $workspace.query).textFieldStyle(.plain)
@@ -53,14 +75,12 @@ struct FilesSidebar: View {
                 .padding(.horizontal, 9).frame(minHeight: 34)
                 .background(appearance.color(.background), in: RoundedRectangle(cornerRadius: 5))
                 .padding(.horizontal, 10).padding(.bottom, 8)
-                #if os(macOS)
-                .padding(.top, 8)
                 #endif
                 if !workspace.query.isEmpty {
                     Picker("Search mode", selection: $workspace.contents) {
                         Text("File names").tag(false)
                         Text("Contents").tag(true)
-                    }.pickerStyle(.segmented).padding(.horizontal, 10).padding(.bottom, 8)
+                    }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 10).padding(.bottom, 8)
                 }
             }
             Rectangle().fill(appearance.color(.border)).frame(height: 1)
@@ -90,11 +110,11 @@ struct FilesSidebar: View {
                         if workspace.locations.isEmpty {
                             note("Open a folder to browse its files.")
                             #if os(macOS)
-                            Button("Open Folder…", action: pickFolder).padding(.horizontal, 14)
+                            Button("Open Folder…", action: pickFolder).padding(.horizontal, 14).padding(.top, 2)
                                 .accessibilityIdentifier("files-open-folder")
                             #endif
                         }
-                        OpenedFiles(history: model.history, select: selectTab, reveal: { tab in
+                        OpenedFiles(history: model.history, appearance: appearance, select: selectTab, reveal: { tab in
                             showInFolder(model.history.folderHint(for: tab))
                         }, delete: { tab in
                             do { model.requestDeletion(try model.history.acquire(tab), tabID: tab.id) }
@@ -106,13 +126,13 @@ struct FilesSidebar: View {
                                 do { select(row, try workspace.access(for: row)) }
                                 catch { model.errorMessage = error.localizedDescription }
                             } label: {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(row.url.lastPathComponent).lineLimit(1)
+                                VStack(alignment: .leading, spacing: hitSpacing) {
+                                    Text(row.url.lastPathComponent).font(.chromeRow).lineLimit(1)
                                     let root = workspace.locations.first { $0.id == row.locationID }
                                     let path = root.map { String(row.url.path.dropFirst($0.reference.url.path.count + 1)) } ?? row.url.path
-                                    Text(path).font(.caption).foregroundStyle(appearance.color(.muted)).lineLimit(1)
-                                    if !row.excerpt.isEmpty { Text(row.excerpt).font(.caption.monospaced()).lineLimit(2) }
-                                }.frame(maxWidth: .infinity, alignment: .leading).padding(10).contentShape(Rectangle())
+                                    Text(path).font(.chromeDetail).foregroundStyle(appearance.color(.muted)).lineLimit(1)
+                                    if !row.excerpt.isEmpty { Text(row.excerpt).font(.chromeDetail.monospaced()).lineLimit(2) }
+                                }.frame(maxWidth: .infinity, alignment: .leading).padding(hitPadding).contentShape(Rectangle())
                             }.buttonStyle(.plain)
                             .contextMenu {
                                 Button("Delete File…", role: .destructive) {
@@ -162,7 +182,7 @@ struct FilesSidebar: View {
 
     private var selected: String? { (workspace.revealedFile ?? model.file?.url)?.standardizedFileURL.path }
     private func note(_ text: String) -> some View {
-        Text(text).font(.footnote).foregroundStyle(appearance.color(.muted)).padding(.horizontal, 14).padding(.vertical, 7)
+        Text(text).font(.chromeNote).foregroundStyle(appearance.color(.muted)).padding(.horizontal, 14).padding(.vertical, 7)
     }
 }
 
@@ -171,14 +191,17 @@ private struct FolderButton: View {
     let expanded: Bool
     let appearance: Appearance
     var depth = 0
+    var symbol: String?
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption2.weight(.bold)).frame(width: 10)
-                Image(systemName: expanded ? "folder.fill" : "folder").foregroundStyle(appearance.color(.muted)).frame(width: 17)
-                Text(name).fontWeight(depth == 0 ? .semibold : .regular).lineLimit(1)
+                Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.chromeChevron)
+                    .foregroundStyle(appearance.color(.muted)).frame(width: 10)
+                Image(systemName: symbol ?? (expanded ? "folder.fill" : "folder")).font(.chromeIcon)
+                    .foregroundStyle(appearance.color(.muted)).frame(width: 17)
+                Text(name).font(.chromeRow).fontWeight(depth == 0 ? .semibold : .regular).lineLimit(1)
                 Spacer(minLength: 0)
             }
             .padding(.leading, 12 + CGFloat(min(depth, 6)) * 12).padding(.trailing, 8)
@@ -212,11 +235,11 @@ private struct BranchRows: View {
                     let selected = selectedPath == row.url.standardizedFileURL.path
                     Button { select(row, branch.access) } label: {
                         HStack(spacing: 6) {
-                            Image(systemName: "doc.text").frame(width: 17).foregroundStyle(appearance.color(.muted))
-                            Text(row.url.lastPathComponent).lineLimit(1)
+                            Image(systemName: "doc.text").font(.chromeIcon).frame(width: 17).foregroundStyle(appearance.color(.muted))
+                            Text(row.url.lastPathComponent).font(.chromeRow).lineLimit(1)
                             Spacer(minLength: 0)
                         }
-                        .padding(.leading, 28 + CGFloat(min(depth, 6)) * 12).padding(.trailing, 8)
+                        .padding(.leading, fileIndent(depth)).padding(.trailing, 8)
                         .frame(minHeight: treeRowHeight).contentShape(Rectangle())
                         .background(selected ? appearance.color(.accent).opacity(0.18) : Color.clear)
                     }
@@ -235,15 +258,21 @@ private struct BranchRows: View {
                         .disabled(branch.pageIndex == 0).accessibilityLabel("Previous files")
                     let first = branch.pageIndex * DirectoryCursor.pageSize + 1
                     Text("\(first)–\(first + branch.rows.count - 1)" + (branch.count.map { " / \($0)" } ?? ""))
-                        .font(.caption.monospacedDigit())
+                        .font(.chromeDetail.monospacedDigit()).foregroundStyle(appearance.color(.muted))
                     Button { branch.loadMore() } label: { Image(systemName: "chevron.right") }
                         .disabled(!branch.more).accessibilityLabel("Next files")
-                }.padding(.leading, 30).frame(minHeight: 40)
+                }
+                #if os(macOS)
+                .controlSize(.small).padding(.leading, fileIndent(depth)).frame(minHeight: treeRowHeight + 4)
+                #else
+                .padding(.leading, 30).frame(minHeight: 40)
+                #endif
             }
             if let error = branch.error {
-                Text(error).font(.footnote).foregroundStyle(appearance.color(.muted)).padding(.horizontal, 20)
+                Text(error).font(.chromeNote).foregroundStyle(appearance.color(.muted)).padding(.horizontal, 20)
             } else if !branch.busy && branch.rows.isEmpty {
-                Text("Empty folder").font(.footnote).foregroundStyle(appearance.color(.muted)).padding(.leading, 40)
+                Text("Empty folder").font(.chromeNote).foregroundStyle(appearance.color(.muted))
+                    .padding(.leading, fileIndent(depth) + 23).frame(minHeight: treeRowHeight)
             }
         }
     }
@@ -251,6 +280,7 @@ private struct BranchRows: View {
 
 private struct OpenedFiles: View {
     @ObservedObject var history: NavigationHistory
+    let appearance: Appearance
     let select: (NavigationHistory.Tab) -> Void
     let reveal: (NavigationHistory.Tab) -> Void
     let delete: (NavigationHistory.Tab) -> Void
@@ -259,25 +289,28 @@ private struct OpenedFiles: View {
 
     var body: some View {
         if history.tabCount > 0 {
-            Button {
+            // Laid out like a top-level folder so it lines up with the tree above it.
+            FolderButton(name: "Opened files", expanded: expanded, appearance: appearance, symbol: "clock.arrow.circlepath") {
                 if !expanded { oldest = Int.max }
                 expanded.toggle()
-            } label: {
-                Label("Opened files", systemImage: "clock.arrow.circlepath").font(.callout)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).frame(minHeight: treeRowHeight)
-                    .contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            }
             if expanded {
                 let page = history.openedFiles(endingAt: oldest)
                 ForEach(page) { tab in
                     HStack(spacing: 4) {
                         Button { select(tab) } label: {
-                            Label(tab.name, systemImage: "doc.text").lineLimit(1)
-                                .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 30).frame(minHeight: treeRowHeight)
-                                .contentShape(Rectangle())
-                        }.buttonStyle(.plain).help(tab.path)
-                        Button { reveal(tab) } label: { Image(systemName: "folder").frame(width: treeRowHeight, height: treeRowHeight) }
-                            .buttonStyle(.plain).accessibilityLabel("Show \(tab.name) in Folder").help("Show in Folder")
+                            HStack(spacing: 6) {
+                                Image(systemName: "doc.text").font(.chromeIcon).frame(width: 17).foregroundStyle(appearance.color(.muted))
+                                Text(tab.name).font(.chromeRow).lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, fileIndent(1)).frame(minHeight: treeRowHeight)
+                            .contentShape(Rectangle())
+                        }.buttonStyle(.plain).accessibilityLabel(tab.name).help(tab.path)
+                        Button { reveal(tab) } label: {
+                            Image(systemName: "folder").font(.chromeIcon).foregroundStyle(appearance.color(.muted))
+                                .frame(width: treeRowHeight, height: treeRowHeight).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain).accessibilityLabel("Show \(tab.name) in Folder").help("Show in Folder")
                     }
                     .contextMenu {
                         Button("Show in Folder") { reveal(tab) }
@@ -290,7 +323,12 @@ private struct OpenedFiles: View {
                     HStack {
                         Button("Older") { if let earlier { oldest = earlier.id } }.disabled(earlier == nil)
                         Button("Newer") { if let later { oldest = later.id } }.disabled(later == nil)
-                    }.padding(.leading, 30)
+                    }
+                    #if os(macOS)
+                    .controlSize(.small).padding(.leading, fileIndent(1)).frame(minHeight: treeRowHeight + 4)
+                    #else
+                    .padding(.leading, 30)
+                    #endif
                 }
             }
         }

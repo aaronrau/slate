@@ -2,11 +2,36 @@ import SwiftUI
 
 // The UserDefaults key for whether the Mac window shows the Files sidebar.
 let filesVisibleKey = "Slate.showFiles"
+// The text size in points for the source and preview, set from View > Bigger / Smaller.
+let textSizeKey = "Slate.textSize"
+let defaultTextSize = 13.0
+let textSizeRange = 9.0...32.0
 #if os(macOS)
 private let tabHeight: CGFloat = 32
 #else
 private let tabHeight: CGFloat = 40
 #endif
+
+// The window chrome's type scale. The document (source and preview) follows the text size
+// setting; the chrome keeps fixed native sizes. On the Mac that is the system's 13 pt for
+// rows, tabs and fields and 11 pt for details, with symbols a step smaller than the text.
+extension Font {
+    #if os(macOS)
+    static var chromeRow: Font { .body }                                  // 13 pt
+    static var chromeTab: Font { .body }                                  // 13 pt
+    static var chromeDetail: Font { .subheadline }                        // 11 pt
+    static var chromeNote: Font { .subheadline }                          // 11 pt
+    static var chromeIcon: Font { .system(size: 12) }
+    static var chromeChevron: Font { .system(size: 9, weight: .bold) }
+    #else
+    static var chromeRow: Font { .body }
+    static var chromeTab: Font { .callout }
+    static var chromeDetail: Font { .caption }
+    static var chromeNote: Font { .footnote }
+    static var chromeIcon: Font { .body }
+    static var chromeChevron: Font { .caption2.weight(.bold) }
+    #endif
+}
 
 struct EditorWindow: View {
     @ObservedObject var model: EditorModel
@@ -19,6 +44,7 @@ struct EditorWindow: View {
     #if os(macOS)
     // Shown and hidden from View > Show Files; the menu shares this setting.
     @AppStorage(filesVisibleKey) private var sidebar = true
+    @AppStorage(textSizeKey) private var textSize = defaultTextSize
     #else
     @State private var sidebar = true
     #endif
@@ -73,11 +99,20 @@ struct EditorWindow: View {
         VStack(spacing: 0) {
             TabStrip(history: model.history, model: model, appearance: appearance, showInFolder: showInFolder)
             rule
+            #if os(macOS)
+            let size = min(max(textSize, textSizeRange.lowerBound), textSizeRange.upperBound)
+            if model.preview && model.page.isUTF8 {
+                PreviewView(content: PreviewContent(model.page, appearance, fontSize: size))
+            } else {
+                SourceView(model: model, appearance: appearance, textSize: size)
+            }
+            #else
             if model.preview && model.page.isUTF8 {
                 PreviewView(content: PreviewContent(model.page, appearance))
             } else {
                 SourceView(model: model, appearance: appearance)
             }
+            #endif
             rule
             pageFooter
         }
@@ -179,8 +214,14 @@ struct EditorWindow: View {
     #endif
 
     private func icon(_ symbol: String, _ label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol).frame(minWidth: 30, minHeight: 36) }
-            .buttonStyle(.plain).accessibilityLabel(label).help(label)
+        Button(action: action) {
+            #if os(macOS)
+            Image(systemName: symbol).font(.chromeIcon).frame(minWidth: 22, minHeight: 22).contentShape(Rectangle())
+            #else
+            Image(systemName: symbol).frame(minWidth: 30, minHeight: 36)
+            #endif
+        }
+        .buttonStyle(.plain).accessibilityLabel(label).help(label)
     }
 
     private func files(compact: Bool) -> some View {
@@ -207,7 +248,7 @@ struct EditorWindow: View {
     private var pageFooter: some View {
         VStack(spacing: 3) {
             if !model.page.isUTF8 {
-                Text("This page contains invalid UTF-8 and is read-only.").font(.caption)
+                Text("This page contains invalid UTF-8 and is read-only.").font(.chromeDetail)
             }
             HStack(spacing: 8) {
                 if model.hasPages {
@@ -218,6 +259,9 @@ struct EditorWindow: View {
                         if !dragging, let slider { model.seek(slider); self.slider = nil }
                     })
                     .accessibilityLabel("Document position")
+                    #if os(macOS)
+                    .controlSize(.small)
+                    #endif
                     icon("chevron.right", "Next page") { model.next() }.disabled(model.page.end >= model.size)
                 }
                 Spacer(minLength: 0)
@@ -226,9 +270,15 @@ struct EditorWindow: View {
                 #endif
                 Text(model.hasPages ? "\(model.page.start.formatted())–\(model.page.end.formatted()) / \(model.size.formatted()) B"
                                     : "\(model.size.formatted()) bytes")
-                    .lineLimit(1).font(.caption.monospacedDigit()).foregroundStyle(appearance.color(.muted))
+                    .lineLimit(1).font(.chromeDetail.monospacedDigit()).foregroundStyle(appearance.color(.muted))
             }
-        }.padding(.horizontal, 10).padding(.vertical, 5).background(appearance.color(.surface))
+        }
+        #if os(macOS)
+        .padding(.horizontal, 12).padding(.vertical, 4)
+        #else
+        .padding(.horizontal, 10).padding(.vertical, 5)
+        #endif
+        .background(appearance.color(.surface))
     }
 }
 
@@ -272,13 +322,13 @@ struct TabStrip: View {
     private func stripButton(forward: Bool) -> some View {
         let label = forward ? "Show next group of tabs" : "Show previous group of tabs"
         return Button { history.shiftStrip(forward: forward) } label: {
-            Image(systemName: forward ? "chevron.right.2" : "chevron.left.2").frame(width: 28, height: tabHeight - 2)
+            Image(systemName: forward ? "chevron.right.2" : "chevron.left.2").font(.chromeIcon).frame(width: 28, height: tabHeight - 2)
         }.buttonStyle(.plain).accessibilityLabel(label).help(label)
     }
 
     private func arrow(_ symbol: String, _ label: String, _ visit: Int?) -> some View {
         Button { if let visit { model.navigate(visit: visit) } } label: {
-            Image(systemName: symbol).frame(width: 31, height: tabHeight - 2)
+            Image(systemName: symbol).font(.chromeIcon).frame(width: 31, height: tabHeight - 2)
         }
         .buttonStyle(.plain).disabled(visit == nil || model.busy)
         .accessibilityLabel(label).help(label)
@@ -287,7 +337,7 @@ struct TabStrip: View {
     private func tab(_ name: String, selected: Bool) -> some View {
         HStack(spacing: 5) {
             if selected && model.dirty { Circle().fill(appearance.color(.accent)).frame(width: 6, height: 6).accessibilityLabel("Modified") }
-            Text(name).lineLimit(1).font(.callout)
+            Text(name).lineLimit(1).font(.chromeTab)
         }
         .padding(.horizontal, 12).frame(height: tabHeight)
         .foregroundStyle(appearance.color(selected ? .text : .muted))

@@ -461,4 +461,116 @@ final class SlateTests: XCTestCase {
         let body = try await web.evaluateJavaScript("document.body.innerText") as? String ?? ""
         XCTFail("Offline preview did not render table and diagram. \(body)")
     }
+
+    @MainActor
+    func testPreviewDiagramsZoomAndAcceptSemicolonsInSequenceMessages() async throws {
+        let controller = PreviewController()
+        let web = controller.makeView()
+        web.frame = CGRect(x: 0, y: 0, width: 1000, height: 600)
+        let markup = """
+        # Diagrams
+
+        ```mermaid
+        flowchart LR
+          A[Start] --> B{Ready?} --> C[Done]
+        ```
+
+        ```mermaid
+        sequenceDiagram
+          participant U as User
+          participant W as Guarded worker
+          U->>W: Actual history and draft
+          W->>W: Project existing goals; append goal/feedback references once; seal bounded payload
+          alt Optional guidance ready and matching
+            W-->>U: Bounded selected payload
+          else Missing, stale or rejected
+            U->>U: Immediate native fallback with current completion state
+          end
+        ```
+        """
+        controller.update(web, PreviewContent(TextPage(text: markup), Appearance(), fontSize: 13))
+        let ready = "document.querySelectorAll('.diagram > .diagram-view > svg').length === 2"
+            + " || document.querySelectorAll('.diagram details').length > 0"
+        var rendered = false
+        for _ in 0..<180 {
+            if (try? await web.evaluateJavaScript(ready)) as? Bool == true { rendered = true; break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let body = try await web.evaluateJavaScript("document.body.innerText") as? String ?? ""
+        XCTAssertTrue(rendered, "Diagrams did not render. \(body)")
+        XCTAssertFalse(body.contains("Could not render"), body)
+        let probe = """
+        (() => {
+          const views = Array.from(document.querySelectorAll('.diagram-view'));
+          const view = views[0], tools = view.parentElement;
+          const result = {
+            svgs: document.querySelectorAll('.diagram svg').length,
+            controls: document.querySelectorAll('.diagram-tools button[data-zoom]').length,
+            labelled: Array.from(document.querySelectorAll('.diagram-tools button')).every(b => b.getAttribute('aria-label')),
+            sequenceText: views[1].querySelector('svg').textContent,
+            initial: +view.dataset.scale
+          };
+          tools.querySelector('[data-zoom=in]').click();
+          result.zoomedIn = +view.dataset.scale;
+          tools.querySelector('[data-zoom=out]').click();
+          tools.querySelector('[data-zoom=out]').click();
+          result.zoomedOut = +view.dataset.scale;
+          tools.querySelector('[data-zoom=reset]').click();
+          result.reset = +view.dataset.scale;
+          tools.querySelector('[data-zoom=fit]').click();
+          result.fit = +view.dataset.scale;
+          result.fitExpected = view.clientWidth / view.querySelector('svg').viewBox.baseVal.width;
+          for (let i = 0; i < 20; i++) tools.querySelector('[data-zoom=in]').click();
+          result.max = +view.dataset.scale;
+          const wheel = ctrlKey => view.dispatchEvent(new WheelEvent('wheel', {ctrlKey, deltaY: -10, bubbles: true, cancelable: true}));
+          result.pinchHandled = !wheel(true);
+          result.scrollHandled = !wheel(false);
+          return JSON.stringify(result);
+        })()
+        """
+        let output = try await web.evaluateJavaScript(probe)
+        let json = try XCTUnwrap(output as? String)
+        let result = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        XCTAssertEqual(result["svgs"] as? Int, 2)
+        XCTAssertEqual(result["controls"] as? Int, 8)
+        XCTAssertEqual(result["labelled"] as? Bool, true)
+        XCTAssertTrue((result["sequenceText"] as? String ?? "").contains("Project existing goals; append"), "\(result)")
+        let initial = try XCTUnwrap(result["initial"] as? Double)
+        XCTAssertEqual(initial, 1, accuracy: 0.001, "A diagram that fits starts at its natural size")
+        XCTAssertEqual(try XCTUnwrap(result["zoomedIn"] as? Double), 1.25, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(result["zoomedOut"] as? Double), 0.8, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(result["reset"] as? Double), 1, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(result["max"] as? Double), 4, accuracy: 0.001)
+        XCTAssertEqual(result["pinchHandled"] as? Bool, true)
+        XCTAssertEqual(result["scrollHandled"] as? Bool, false, "Plain wheel scrolling must not be hijacked")
+        let fitExpected = try XCTUnwrap(result["fitExpected"] as? Double)
+        XCTAssertEqual(try XCTUnwrap(result["fit"] as? Double), min(4, max(0.25, fitExpected)), accuracy: 0.001)
+
+        // Too wide for its box: start at fit-to-width, but never with labels under 10px.
+        web.frame = CGRect(x: 0, y: 0, width: 260, height: 600)
+        controller.update(web, PreviewContent(TextPage(text: markup + "\n"), Appearance(), fontSize: 13))
+        let narrow = """
+        (() => {
+          const view = document.querySelector('.diagram-view');
+          if (!view || view.dataset.scale === '4' || document.querySelectorAll('.diagram-view').length !== 2) return null;
+          const width = view.querySelector('svg').viewBox.baseVal.width;
+          return JSON.stringify({scale: +view.dataset.scale, expected: Math.min(1, Math.max(view.clientWidth / width, 10 / 13)),
+                                 wide: width > view.clientWidth, pannable: view.classList.contains('pannable')});
+        })()
+        """
+        var narrowResult: [String: Any] = [:]
+        for _ in 0..<180 {
+            if let text = (try? await web.evaluateJavaScript(narrow)) as? String,
+               let object = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] {
+                narrowResult = object
+                break
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertEqual(narrowResult["wide"] as? Bool, true, "\(narrowResult)")
+        let narrowScale = try XCTUnwrap(narrowResult["scale"] as? Double)
+        XCTAssertEqual(narrowScale, try XCTUnwrap(narrowResult["expected"] as? Double), accuracy: 0.001)
+        XCTAssertGreaterThanOrEqual(narrowScale, 10.0 / 13 - 0.001)
+        XCTAssertEqual(narrowResult["pannable"] as? Bool, true)
+    }
 }
