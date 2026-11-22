@@ -74,8 +74,11 @@ final class FilesSidebarTests: XCTestCase {
         XCTAssertTrue(tab.waitForExistence(timeout: 5))
         editor.tap()
         editor.typeText("draft edits")
-        let options = app.buttons["File and appearance options"]
-        options.tap()
+        let options = app.buttons["file-options"]
+        XCTAssertTrue(options.exists)
+        // A physical tap on the visible native menu also exercises its hit
+        // target while TextKit owns keyboard focus.
+        options.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         app.buttons["current-delete-file"].tap()
         let confirm = app.alerts.firstMatch
         XCTAssertTrue(confirm.waitForExistence(timeout: 5))

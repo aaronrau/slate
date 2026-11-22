@@ -115,7 +115,7 @@ struct EditorWindow: View {
             Spacer(minLength: 0)
             if model.busy { ProgressView().controlSize(.small) }
             icon("square.and.arrow.down", "Save") { model.save() }.disabled(model.busy)
-            Menu {
+            Menu("File and appearance options", systemImage: "ellipsis.circle") {
                 Button("New Document", systemImage: "doc.badge.plus") { model.newDocument() }
                 Button("Open File…", systemImage: "doc") { pickFile() }
                 Button("Open Folder…", systemImage: "folder") { pickFolder() }
@@ -126,9 +126,11 @@ struct EditorWindow: View {
                 }
                 Divider()
                 Button("Appearance…", systemImage: "slider.horizontal.3") { settings() }
-            } label: { Image(systemName: "ellipsis.circle").frame(minWidth: 30, minHeight: 36) }
-            .fixedSize()
-            .accessibilityLabel("File and appearance options")
+            }
+            .labelStyle(.iconOnly)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+            .accessibilityIdentifier("file-options")
         }
         .padding(.horizontal, 10)
         .frame(height: 46)
