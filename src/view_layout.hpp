@@ -1,11 +1,32 @@
 #pragma once
 
 #include "view_rows.hpp"
+#include "theme.hpp"
 #include <pango/pangocairo.h>
 #include <memory>
 #include <vector>
 
 namespace slate::view {
+
+// Decode color strings once when applying settings, outside the drawing and shaping paths.
+struct EditorColors {
+    unsigned background, surface, text, muted, border, accent, selection, selected_text, code, current_line;
+    explicit EditorColors(const Palette& p) {
+        auto rgb = [](const std::string& hex) {
+            return static_cast<unsigned>(g_ascii_strtoull(hex.c_str() + 1, nullptr, 16));
+        };
+        background = rgb(p.background);
+        surface = rgb(p.surface);
+        text = rgb(p.text);
+        muted = rgb(p.muted);
+        border = rgb(p.border);
+        accent = rgb(p.accent);
+        selection = rgb(p.selection);
+        selected_text = rgb(p.selection_text);
+        code = rgb(p.code_text);
+        current_line = rgb(p.current_line);
+    }
+};
 
 inline void foreground(PangoAttrList* attrs, std::size_t first, std::size_t end, unsigned rgb) {
     auto attr = pango_attr_foreground_new(((rgb >> 16) & 255) * 257,
@@ -15,7 +36,7 @@ inline void foreground(PangoAttrList* attrs, std::size_t first, std::size_t end,
     pango_attr_list_change(attrs, attr);
 }
 
-inline void style_markdown(PangoLayout* layout, std::string_view line) {
+inline void style_markdown(PangoLayout* layout, std::string_view line, const EditorColors& colors) {
     auto first = line.find_first_not_of(" \t");
     if (first == line.npos) return;
     auto attrs = pango_attr_list_new();
@@ -23,16 +44,16 @@ inline void style_markdown(PangoLayout* layout, std::string_view line) {
     if (tail.front() == '#') {
         auto n = std::min(tail.size(), tail.find_first_not_of('#'));
         if (n > 0 && n <= 6 && (n == tail.size() || tail[n] == ' ' || tail[n] == '\t')) {
-            foreground(attrs, first, line.size(), 0x8fdac9);
+            foreground(attrs, first, line.size(), colors.accent);
             auto weight = pango_attr_weight_new(PANGO_WEIGHT_BOLD);
             weight->start_index = first;
             weight->end_index = line.size();
             pango_attr_list_insert(attrs, weight);
         }
     } else if (tail.front() == '>') {
-        foreground(attrs, first, line.size(), 0x93a6aa);
+        foreground(attrs, first, line.size(), colors.muted);
     } else if (tail.starts_with("- ") || tail.starts_with("* ") || tail.starts_with("+ ")) {
-        foreground(attrs, first, first + 1, 0xe4b782);
+        foreground(attrs, first, first + 1, colors.code);
     }
     for (std::size_t i = first; i < line.size();) {
         if (line[i] == '`') {
@@ -41,19 +62,19 @@ inline void style_markdown(PangoLayout* layout, std::string_view line) {
             auto delimiter = line.substr(start, i - start);
             auto end = line.find(delimiter, i);
             if (end != line.npos) i = end + delimiter.size();
-            foreground(attrs, start, i, 0xe1ba8a);
+            foreground(attrs, start, i, colors.code);
         } else if (line[i] == '[') {
             auto close = line.find("](", i + 1);
             if (close == line.npos) { ++i; continue; }
             auto end = line.find(')', close + 2);
             if (end == line.npos) { ++i; continue; }
-            foreground(attrs, i, close + 1, 0x93bedf);
-            foreground(attrs, close + 1, end + 1, 0xa3a4c7);
+            foreground(attrs, i, close + 1, colors.accent);
+            foreground(attrs, close + 1, end + 1, colors.muted);
             i = end + 1;
         } else if (line.substr(i).starts_with("**")) {
             auto end = line.find("**", i + 2);
             if (end == line.npos) { i += 2; continue; }
-            foreground(attrs, i, end + 2, 0xe1c7a5);
+            foreground(attrs, i, end + 2, colors.code);
             i = end + 2;
         } else {
             ++i;
@@ -72,7 +93,7 @@ struct Layout {
     int width = 0;
 
     Layout(Row row, std::string_view raw, PangoContext* context, PangoFontDescription* font,
-           PangoTabArray* tabs, bool markdown)
+           PangoTabArray* tabs, bool markdown, const EditorColors& colors)
         : row(row), source(raw), pango(pango_layout_new(context), g_object_unref) {
         std::string display;
         display.reserve(raw.size());
@@ -93,7 +114,7 @@ struct Layout {
         pango_layout_set_single_paragraph_mode(pango.get(), TRUE);
         pango_layout_set_auto_dir(pango.get(), FALSE);
         pango_layout_set_text(pango.get(), display.c_str(), display.size());
-        if (markdown) style_markdown(pango.get(), display);
+        if (markdown) style_markdown(pango.get(), display, colors);
         pango_layout_get_pixel_size(pango.get(), &width, nullptr);
     }
 

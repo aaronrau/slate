@@ -1,4 +1,5 @@
 #include "mermaid_renderer.hpp"
+#include "theme.hpp"
 
 #include <gio/gio.h>
 #include <gio/gunixinputstream.h>
@@ -119,8 +120,60 @@ struct Output {
     MermaidStatus status = MermaidStatus::Unavailable;
 };
 
+// Merman's editor presets paint their own full-canvas background. Its native
+// Mermaid variables color the diagram while leaving the PNG canvas transparent.
+std::string diagram_config(const Palette& p) {
+    std::string json = p.dark ? R"({"look":"classic","theme":"dark","themeVariables":{"darkMode":true)"
+                              : R"({"look":"classic","theme":"default","themeVariables":{"darkMode":false)";
+    auto colors = [&](const std::string& color, std::initializer_list<const char*> names) {
+        for (const auto* name : names)
+            json += ",\"" + std::string(name) + "\":\"" + color + "\"";
+    };
+    colors(p.background, {"background"});
+    colors(p.raised, {"primaryColor", "mainBkg", "actorBkg", "labelBoxBkg", "stateBkg"});
+    colors(p.surface, {"secondaryColor", "clusterBkg", "edgeLabelBackground"});
+    colors(p.selection, {"tertiaryColor", "noteBkgColor"});
+    colors(p.text, {"textColor", "titleColor", "primaryTextColor", "secondaryTextColor",
+                    "tertiaryTextColor", "nodeTextColor", "actorTextColor", "signalTextColor",
+                    "labelTextColor", "loopTextColor", "noteTextColor", "pieTitleTextColor",
+                    "pieLegendTextColor"});
+    colors(p.accent, {"primaryBorderColor", "secondaryBorderColor", "tertiaryBorderColor",
+                      "nodeBorder", "stateBorder", "clusterBorder", "actorBorder", "noteBorderColor"});
+    colors(p.muted, {"lineColor", "defaultLinkColor", "transitionColor", "actorLineColor",
+                     "signalColor", "pieStrokeColor", "pieOuterStrokeColor"});
+    json += R"(,"gantt":{"axisColor":")" + p.muted + R"("},"wardley":{"backgroundColor":"transparent"})";
+    json += R"(,"xyChart":{"backgroundColor":"transparent")";
+    colors(p.text, {"titleColor", "xAxisTitleColor", "yAxisTitleColor", "xAxisLabelColor", "yAxisLabelColor"});
+    colors(p.muted, {"xAxisLineColor", "yAxisLineColor", "xAxisTickColor", "yAxisTickColor"});
+    return json + "}}}";
+}
+
+// The CLI requires a regular file for configuration. Each worker owns one
+// private file and rewrites it only when a cache miss needs another palette.
+struct ConfigFile {
+    GString path{nullptr, &g_free};
+    std::optional<Palette> palette;
+    ~ConfigFile() { if (path) unlink(path.get()); }
+
+    bool apply(const Palette& p) {
+        if (palette && *palette == p) return true;
+        if (!path) {
+            char* name = nullptr;
+            const auto fd = g_file_open_tmp("slate-mermaid-XXXXXX", &name, nullptr);
+            if (fd == -1) return false;
+            close(fd);
+            path.reset(name);
+        }
+        const auto data = diagram_config(p);
+        if (!g_file_set_contents_full(path.get(), data.c_str(), data.size(), G_FILE_SET_CONTENTS_NONE,
+                                      0600, nullptr)) return false;
+        palette = p;
+        return true;
+    }
+};
+
 Output run_renderer(const std::string& executable, std::string_view source,
-                    const std::vector<std::string>* fonts, const std::function<bool()>& cancelled) {
+                    const char* config, const std::vector<std::string>* fonts, const std::function<bool()>& cancelled) {
     if (cancelled()) return {{}, MermaidStatus::Cancelled};
     const int input_fd = source_socket(source);
     if (input_fd < 0) return {};
@@ -129,7 +182,7 @@ Output run_renderer(const std::string& executable, std::string_view source,
         &g_object_unref);
     g_subprocess_launcher_take_stdin_fd(launcher.get(), input_fd);
     std::vector<const char*> args{
-        executable.c_str(), "render", "-", "-f", "png", "-o", "-", "-q", "-b", "white",
+        executable.c_str(), "render", "-", "-f", "png", "-o", "-", "-q", "-b", "transparent", "-c", config,
         "--font-system", fonts ? "off" : "platform",
         "--raster-fit-width", "720", "--raster-fit-height", "540",
         "--raster-max-width", "720", "--raster-max-height", "540",
@@ -196,32 +249,36 @@ MermaidImage decode_png(const std::vector<guint8>& bytes) {
 bool mermaid_renderer_available() { return !renderer_path().empty(); }
 
 struct MermaidRenderer::Impl {
-    struct Entry { std::string source; MermaidResult result; std::size_t bytes; };
+    struct Entry { std::string source; Palette palette; MermaidResult result; std::size_t bytes; };
     std::list<Entry> cache;
     std::size_t total = 0;
     std::string executable = renderer_path();
     std::optional<std::vector<std::string>> font_files;
+    ConfigFile config;
 };
 
 MermaidRenderer::MermaidRenderer() : impl_(std::make_unique<Impl>()) {}
 MermaidRenderer::~MermaidRenderer() = default;
 
-MermaidResult MermaidRenderer::render(std::string_view source, const std::function<bool()>& cancelled) {
+MermaidResult MermaidRenderer::render(std::string_view source, const Palette& palette,
+                                      const std::function<bool()>& cancelled) {
     if (cancelled()) return {{}, MermaidStatus::Cancelled};
     if (source.empty() || source.size() > max_mermaid_source) return {{}, MermaidStatus::Invalid};
     auto& state = *impl_;
-    const auto hit = std::find_if(state.cache.begin(), state.cache.end(), [&](const auto& entry) { return entry.source == source; });
+    const auto hit = std::find_if(state.cache.begin(), state.cache.end(), [&](const auto& entry) {
+        return entry.source == source && entry.palette == palette;
+    });
     if (hit != state.cache.end()) {
         state.cache.splice(state.cache.begin(), state.cache, hit);
         return state.cache.front().result;
     }
-    if (state.executable.empty()) return {};
+    if (state.executable.empty() || !state.config.apply(palette)) return {};
     const std::vector<std::string>* fonts = nullptr;
     if (uses_default_fonts(source)) {
         if (!state.font_files) state.font_files = default_fonts();
         if (!state.font_files->empty()) fonts = &*state.font_files;
     }
-    auto output = run_renderer(state.executable, source, fonts, cancelled);
+    auto output = run_renderer(state.executable, source, state.config.path.get(), fonts, cancelled);
     MermaidResult result{{}, output.status};
     if (output.status == MermaidStatus::Ready) {
         result.image = decode_png(output.png);
@@ -233,7 +290,7 @@ MermaidResult MermaidRenderer::render(std::string_view source, const std::functi
         state.total -= state.cache.back().bytes;
         state.cache.pop_back();
     }
-    state.cache.push_front({std::string(source), result, size});
+    state.cache.push_front({std::string(source), palette, result, size});
     state.total += size;
     return result;
 }

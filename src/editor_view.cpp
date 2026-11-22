@@ -45,6 +45,7 @@ struct EditorView::Impl : std::enable_shared_from_this<EditorView::Impl> {
     EditorView& owner;
     Document& doc;
     Rows rows;
+    view::EditorColors colors{default_palette()};
     GtkWidget* root = gtk_grid_new();
     GtkWidget* area = gtk_drawing_area_new();
     GtkAdjustment* vertical = gtk_adjustment_new(0, 0, 1, 1, 1, 1);
@@ -255,7 +256,7 @@ struct EditorView::Impl : std::enable_shared_from_this<EditorView::Impl> {
     }
     Layout make_layout(Row row) {
         return Layout(row, rows.bytes(row.start, row.end - row.start),
-                      gtk_widget_get_pango_context(area), font, tabs, markdown);
+                      gtk_widget_get_pango_context(area), font, tabs, markdown, colors);
     }
     void sync() {
         auto extension = doc.path().extension().string();
@@ -358,10 +359,10 @@ struct EditorView::Impl : std::enable_shared_from_this<EditorView::Impl> {
     }
     void draw(cairo_t* cr) {
         sync();
-        color(cr, 0x171b20);
+        color(cr, colors.background);
         cairo_paint(cr);
-        fill(cr, 0x161a1f, 0, 0, gutter, height);
-        fill(cr, 0x242a31, gutter, 0, 1, height);
+        fill(cr, colors.surface, 0, 0, gutter, height);
+        fill(cr, colors.border, gutter, 0, 1, height);
         auto label = gtk_widget_create_pango_layout(area, "");
         pango_layout_set_font_description(label, font);
         Pos first = std::min(caret, anchor), last = std::max(caret, anchor);
@@ -374,14 +375,14 @@ struct EditorView::Impl : std::enable_shared_from_this<EditorView::Impl> {
             int y = inset + static_cast<int>(i) * line_height;
             int baseline_top = y + (line_height - font_height) / 2;
             bool active = row.start == current;
-            if (active) fill(cr, 0x1e242b, gutter + 1, y, width - gutter, line_height);
+            if (active) fill(cr, colors.current_line, gutter + 1, y, width - gutter, line_height);
             bool continued = row.start && rows.bytes(row.start - 1, 1) != "\n";
             auto value = number ? (continued ? std::string("↪") : std::to_string(*number))
                                 : hex_address(row.start);
             pango_layout_set_text(label, value.c_str(), -1);
             int label_width = 0;
             pango_layout_get_pixel_size(label, &label_width, nullptr);
-            color(cr, active ? 0xa2b4ba : 0x62717d);
+            color(cr, active ? colors.text : colors.muted);
             cairo_move_to(cr, gutter - 11 - label_width, baseline_top);
             pango_cairo_show_layout(cr, label);
             cairo_save(cr);
@@ -396,29 +397,29 @@ struct EditorView::Impl : std::enable_shared_from_this<EditorView::Impl> {
                 for (int j = 0; j < count; ++j) {
                     auto x1 = ranges[2 * j] / double(PANGO_SCALE);
                     auto x2 = ranges[2 * j + 1] / double(PANGO_SCALE);
-                    fill(cr, 0x304a50, left + x1, y, x2 - x1, line_height);
+                    fill(cr, colors.selection, left + x1, y, x2 - x1, line_height);
                 }
                 g_free(ranges);
                 if (row.newline && last > row.end)
-                    fill(cr, 0x304a50, left + layout.x(row.end), y, cell, line_height);
+                    fill(cr, colors.selection, left + layout.x(row.end), y, cell, line_height);
             }
-            color(cr, 0xd5dee4);
+            color(cr, colors.text);
             cairo_move_to(cr, left, baseline_top);
             pango_cairo_show_layout(cr, layout.pango.get());
             if (active && gtk_widget_has_focus(area)) {
                 int x = static_cast<int>(left) + layout.x(caret);
-                fill(cr, 0x89ddc8, x, y + 3, 2, line_height - 6);
+                fill(cr, colors.accent, x, y + 3, 2, line_height - 6);
                 GdkRectangle rect{x, y, cell, line_height};
                 gtk_im_context_set_cursor_location(im, &rect);
                 if (!preedit.empty()) {
                     pango_layout_set_text(label, preedit.c_str(), -1);
                     int w = 0;
                     pango_layout_get_pixel_size(label, &w, nullptr);
-                    fill(cr, 0x28383d, x, y, w, line_height);
-                    color(cr, 0xe3edea);
+                    fill(cr, colors.selection, x, y, w, line_height);
+                    color(cr, colors.selected_text);
                     cairo_move_to(cr, x, baseline_top);
                     pango_cairo_show_layout(cr, label);
-                    fill(cr, 0x89ddc8, x, y + line_height - 2, w, 1);
+                    fill(cr, colors.accent, x, y + line_height - 2, w, 1);
                 }
             }
             cairo_restore(cr);
@@ -781,6 +782,12 @@ EditorView::EditorView(Document& doc) : impl_(std::make_shared<Impl>(*this, doc)
 }
 EditorView::~EditorView() = default;
 GtkWidget* EditorView::widget() const { return impl_->root; }
+void EditorView::set_palette(const Palette& palette) {
+    impl_->colors = view::EditorColors(palette);
+    impl_->visible.clear();
+    impl_->needs_layout = true;
+    gtk_widget_queue_draw(impl_->area);
+}
 void EditorView::focus() {
     gtk_widget_grab_focus(impl_->area);
     gtk_widget_queue_draw(impl_->area);

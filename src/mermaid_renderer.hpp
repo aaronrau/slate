@@ -7,6 +7,7 @@
 
 namespace slate {
 
+struct Palette;
 inline constexpr std::size_t max_mermaid_source = 16 * 1024;
 bool mermaid_renderer_available();
 using MermaidImage = std::shared_ptr<GdkPixbuf>;
@@ -24,7 +25,7 @@ public:
     MermaidRenderer(const MermaidRenderer&) = delete;
     MermaidRenderer& operator=(const MermaidRenderer&) = delete;
 
-    MermaidResult render(std::string_view source, const std::function<bool()>& cancelled);
+    MermaidResult render(std::string_view source, const Palette& palette, const std::function<bool()>& cancelled);
 
 private:
     struct Impl;

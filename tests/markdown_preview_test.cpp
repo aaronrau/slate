@@ -1,5 +1,6 @@
 #include "markdown_preview.hpp"
 #include "mermaid_renderer.hpp"
+#include "theme.hpp"
 
 #include <fcntl.h>
 #include <fstream>
@@ -120,6 +121,42 @@ void mermaid_fences(MarkdownPreview& preview, GtkTextView* view) {
     check(GTK_IS_LABEL(source) && gtk_label_get_selectable(GTK_LABEL(source)) &&
           g_str_equal(gtk_label_get_text(GTK_LABEL(source)), "unknown diagram syntax"),
           "fallback exposes original selectable Mermaid source");
+
+    auto* buffer = gtk_text_view_get_buffer(view);
+    auto first = find(view, "Ordinary"), last = first;
+    gtk_text_iter_forward_word_end(&last);
+    gtk_text_buffer_select_range(buffer, &first, &last);
+    auto* original = available ? gtk_image_get_pixbuf(GTK_IMAGE(children[0])) : nullptr;
+    if (original) g_object_ref(original);
+    auto light = slate::default_palette(false);
+    light.code_text = "#4931a0";
+    preview.set_palette(light);
+    check(gtk_text_view_get_buffer(view) == buffer, "changing appearance keeps the current preview buffer");
+    auto* tags = gtk_text_buffer_get_tag_table(buffer);
+    GdkRGBA *foreground = nullptr, expected{};
+    g_object_get(gtk_text_tag_table_lookup(tags, "md-code-block"), "foreground-rgba", &foreground, nullptr);
+    gdk_rgba_parse(&expected, light.code_text.c_str());
+    check(foreground && gdk_rgba_equal(foreground, &expected), "custom code color applied to current document");
+    gdk_rgba_free(foreground);
+    if (original) {
+        const auto timeout = g_get_monotonic_time() + 10 * G_TIME_SPAN_SECOND;
+        for (;;) {
+            auto widgets = diagram_children(view);
+            if (!widgets.empty() && GTK_IS_IMAGE(widgets[0])) {
+                auto* current = gtk_image_get_pixbuf(GTK_IMAGE(widgets[0]));
+                if (current && current != original && gdk_pixbuf_get_has_alpha(current)) break;
+            }
+            check(g_get_monotonic_time() < timeout, "theme switch did not refresh the diagram");
+            g_main_context_iteration(nullptr, FALSE);
+            g_usleep(1000);
+        }
+        g_object_unref(original);
+    }
+    check(gtk_text_view_get_buffer(view) == buffer && gtk_text_buffer_get_selection_bounds(buffer, &first, &last),
+          "changing appearance preserves the rendered text and selection");
+    auto* selected = gtk_text_buffer_get_text(buffer, &first, &last, FALSE);
+    check(g_str_equal(selected, "Ordinary"), "selected text preserved through theme switch");
+    g_free(selected);
 }
 
 GdkRectangle location(GtkTextView* view, const char* value, bool end = false) {
@@ -144,6 +181,41 @@ void wait_for_layout(GtkTextView* view) {
     }
     g_signal_handler_disconnect(view, handler);
     check(painted, "table layout drawn");
+}
+
+void mermaid_resize(MarkdownPreview& preview, GtkTextView* view, GtkWindow* window) {
+    if (!slate::mermaid_renderer_available()) return;
+    Document doc;
+    doc.replace(0, 0, "```mermaid\nflowchart LR\n A[Open file] --> B[Parse Markdown] --> C[Draw preview]\n```\n\n"
+                      "```mermaid\nsequenceDiagram\n Editor->>Preview: Parse document\n Preview-->>Editor: Ready\n```\n\nAfter diagrams\n");
+    preview.show(doc.snapshot());
+    wait(preview);
+    auto allocation = [&](int requested, int expected_width = 0) {
+        gtk_window_resize(window, requested, 460);
+        const auto deadline = g_get_monotonic_time() + 5 * G_TIME_SPAN_SECOND;
+        for (;;) {
+            wait_for_layout(view);
+            auto widgets = diagram_children(view);
+            const int width = gtk_widget_get_allocated_width(GTK_WIDGET(view));
+            if (std::abs(width - requested) > 16 || widgets.size() != 2 ||
+                !GTK_IS_IMAGE(widgets[0]) || !GTK_IS_IMAGE(widgets[1])) {
+                check(g_get_monotonic_time() < deadline, "diagram viewport did not settle");
+                continue;
+            }
+            GtkAllocation a{}, b{};
+            gtk_widget_get_allocation(gtk_widget_get_parent(widgets[0]), &a);
+            gtk_widget_get_allocation(gtk_widget_get_parent(widgets[1]), &b);
+            const auto right = width - gtk_text_view_get_right_margin(view);
+            if (a.x + a.width <= right && b.x + b.width <= right && a.y + a.height <= b.y &&
+                a.width > 100 && b.height > 100 && (!expected_width || a.width == expected_width)) return a;
+            check(g_get_monotonic_time() < deadline, "diagram clipped or overlapping its neighbor");
+        }
+    };
+    const auto wide = allocation(760);
+    const auto narrow = allocation(360);
+    check(narrow.width < wide.width && std::abs(narrow.height * wide.width - wide.height * narrow.width) <= wide.width,
+          "diagram did not scale proportionally");
+    check(allocation(760, wide.width).height == wide.height, "diagram did not return to full size");
 }
 
 void follow(GtkTextView* view, const char* text) {
@@ -194,7 +266,7 @@ void exercise() {
     has_tag(view, "Go", "md-link");
     has_tag(view, "Quantity", "md-table-head");
     has_tag(view, "Biscuit", "md-cell");
-    check(text.find("│") != text.npos && text.find("☑") != text.npos, "table and task rendering");
+    check(text.find("☑") != text.npos, "task rendering");
     check(text.find("**") == text.npos && text.find("[ref]") == text.npos, "Markdown syntax consumed");
     has_tag(view, "missing image", "md-alt");
     auto* buffer = gtk_text_view_get_buffer(view);
@@ -214,13 +286,16 @@ void exercise() {
     follow(view, "Open another");
     check(opened, "decoded relative Markdown link routed to editor");
     mermaid_fences(preview, view);
+    mermaid_resize(preview, view, GTK_WINDOW(window));
 
     Document table_doc;
     table_doc.replace(0, 0,
         "| Right | Center | Details |\n| ---: | :---: | :--- |\n"
         "| 123456 | **Wide label** | Alpha line [link](#table-end) with a long description that "
         "continues across multiple visual lines inside this cell and ends with a final note. |\n"
-        "| 27 | 界 | Short row |\n| 910 |\n\n## Table end\n");
+        "| 27 | 界 | Short row |\n| 910 |\n"
+        "| 83 | Picture | Before image ![a small image](" + (root / "test.png").string() +
+        ") the text after it wraps within the column and ends with this caption. |\n\n## Table end\n");
     gtk_window_resize(GTK_WINDOW(window), 460, 400);
     const auto resize_deadline = g_get_monotonic_time() + G_TIME_SPAN_SECOND;
     while (gtk_widget_get_allocated_width(GTK_WIDGET(view)) > 500) {
@@ -250,6 +325,13 @@ void exercise() {
     const auto next_row = location(view, "Short row");
     check(final.y > alpha.y && next_row.y > final.y, "wide cells wrap before the next row");
     check(alpha.x == next_row.x && final.x >= alpha.x, "wrapped cells keep their own column");
+    check(location(view, "caption.").y > location(view, "Before image").y, "prose wraps around a table image");
+    gtk_text_buffer_get_start_iter(gtk_text_view_get_buffer(view), &iter);
+    int table_images = 0;
+    do {
+        if (gtk_text_iter_get_pixbuf(&iter)) ++table_images;
+    } while (gtk_text_iter_forward_char(&iter));
+    check(table_images == 1, "wrapped image cell embeds a single image");
     check(location(view, "Details").x == alpha.x, "heading and styled data share the column");
     check(location(view, "123456", true).x == location(view, "27", true).x,
           "right alignment is based on actual text width");

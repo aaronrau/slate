@@ -11,6 +11,7 @@
 namespace slate {
 
 class Document;
+struct Palette;
 
 class EditorView {
 public:
@@ -20,6 +21,7 @@ public:
     EditorView& operator=(const EditorView&) = delete;
 
     GtkWidget* widget() const;
+    void set_palette(const Palette& palette);
     void focus();
     void reset();
     void jump(std::uint64_t byte_offset, std::size_t select_bytes = 0);

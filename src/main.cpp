@@ -68,6 +68,7 @@ bool markdown(const fs::path& path) {
 class Window {
     enum class Edit { undo, redo, cut, copy, paste, select_all, count };
     fs::path root_;
+    Appearance appearance_;
     Document document_;
     EditorView editor_;
     Workspace workspace_;
@@ -114,8 +115,9 @@ class Window {
         const bool save = action == GTK_FILE_CHOOSER_ACTION_SAVE;
         const char* title = save ? "Save As" :
             (action == GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER ? "Open Folder" : "Open File");
-        auto* dialog = gtk_file_chooser_native_new(title, GTK_WINDOW(win_), action,
-            save ? "_Save" : "_Open", "_Cancel");
+        auto* dialog = gtk_file_chooser_dialog_new(title, GTK_WINDOW(win_), action,
+            "_Cancel", GTK_RESPONSE_CANCEL, save ? "_Save" : "_Open", GTK_RESPONSE_ACCEPT, nullptr);
+        gtk_dialog_set_default_response(GTK_DIALOG(dialog), GTK_RESPONSE_ACCEPT);
         auto* chooser = GTK_FILE_CHOOSER(dialog);
         gtk_file_chooser_set_local_only(chooser, TRUE);
         gtk_file_chooser_set_current_folder(chooser, root_.c_str());
@@ -128,12 +130,12 @@ class Window {
                 gtk_file_chooser_set_filename(chooser, current.c_str());
         }
         std::optional<fs::path> selected;
-        if (gtk_native_dialog_run(GTK_NATIVE_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
             gchar* filename = gtk_file_chooser_get_filename(chooser);
             if (filename) selected = fs::path(filename);
             g_free(filename);
         }
-        g_object_unref(dialog);
+        gtk_widget_destroy(dialog);
         return selected;
     }
 
@@ -182,6 +184,7 @@ class Window {
         if (rendered) {
             if (!preview_) {
                 preview_.emplace();
+                preview_->set_palette(appearance_.palette());
                 preview_->set_open_link([this](const fs::path& path, const std::string& anchor) {
                     run([&] { open_file(path, 0, 0, false, anchor); });
                 });
@@ -411,6 +414,14 @@ class Window {
         edit_item(editing, "_Copy", "<Primary>c", Edit::copy);
         edit_item(editing, "_Paste", "<Primary>v", Edit::paste);
 
+        gtk_menu_shell_append(GTK_MENU_SHELL(editing), gtk_separator_menu_item_new());
+        menu_item(editing, "_Appearance…", "<Primary>comma", [this] {
+            appearance_.edit(GTK_WINDOW(win_), [this](const Palette& colors) {
+                editor_.set_palette(colors);
+                if (preview_) preview_->set_palette(colors);
+            });
+        });
+
         auto* selection = submenu(bar, "_Selection");
         edit_item(selection, "Select _All", "<Primary>a", Edit::select_all);
 
@@ -496,6 +507,7 @@ class Window {
 public:
     explicit Window(const fs::path& root)
         : root_(root), editor_(document_), workspace_(root) {
+        editor_.set_palette(appearance_.palette());
         win_ = gtk_window_new(GTK_WINDOW_TOPLEVEL);
         gtk_widget_set_name(win_, "slate");
         gtk_window_set_default_size(GTK_WINDOW(win_), 1120, 720);
@@ -542,14 +554,6 @@ public:
     }
 };
 
-void load_theme() {
-    g_object_set(gtk_settings_get_default(), "gtk-application-prefer-dark-theme", TRUE, nullptr);
-    auto* provider = gtk_css_provider_new();
-    gtk_css_provider_load_from_data(provider, theme, -1, nullptr);
-    gtk_style_context_add_provider_for_screen(gdk_screen_get_default(),
-        GTK_STYLE_PROVIDER(provider), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-    g_object_unref(provider);
-}
 }
 }
 
@@ -578,7 +582,6 @@ int main(int argc, char** argv) {
             std::cerr << "Slate needs a graphical session to open its window.\n";
             return 1;
         }
-        slate::load_theme();
         slate::Window window(root);
         window.show(file);
         gtk_main();

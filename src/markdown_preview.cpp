@@ -1,6 +1,7 @@
 #include "markdown_preview.hpp"
 #include "markdown_model.hpp"
 #include "mermaid_renderer.hpp"
+#include "theme.hpp"
 
 #include <pango/pangocairo.h>
 
@@ -18,6 +19,7 @@
 #include <unordered_map>
 #include <unistd.h>
 #include <utility>
+#include <variant>
 
 namespace slate {
 namespace {
@@ -33,12 +35,15 @@ struct Request {
     Offset page, offset;
     bool locate;
     Offset stride;
-    std::uint64_t generation;
     std::function<void()> notify;
     int table_width;
     double dpi;
-    int ascii_advance;
-    std::function<void(unsigned, MermaidResult)> notify_diagram;
+};
+
+struct DiagramRequest {
+    std::vector<std::string> sources;
+    Palette palette;
+    std::function<void(unsigned, MermaidResult)> notify;
 };
 
 // Determine each boundary from its own small window so navigation works in
@@ -175,10 +180,11 @@ struct Format {
     std::uint8_t level, depth, style;
     bool quoted;
     unsigned tabs = none;
+    bool last_table_row = false;
     bool operator==(const Format&) const = default;
     bool same_block(const Format& other) const {
         return kind == other.kind && level == other.level && depth == other.depth &&
-               quoted == other.quoted && tabs == other.tabs;
+               quoted == other.quoted && tabs == other.tabs && last_table_row == other.last_table_row;
     }
 };
 struct Run {
@@ -190,10 +196,15 @@ struct Run {
     bool object() const { return image != none || diagram != none; }
 };
 struct Link { int begin, end; unsigned dest; };
-struct TableTab {
-    int x;
+struct TableColumn {
+    int stop, right;
     MarkdownAlign align = MarkdownAlign::Left;
-    bool operator==(const TableTab&) const = default;
+    bool operator==(const TableColumn&) const = default;
+};
+struct TableRow {
+    int begin, end;
+    unsigned columns;
+    bool header, stripe, last;
 };
 struct Page {
     std::string text, error;
@@ -203,50 +214,42 @@ struct Page {
     std::unordered_map<std::string, int> anchors;
     std::vector<Pixbuf> images;
     std::vector<std::string> diagrams;
-    std::vector<std::vector<TableTab>> tab_sets;
+    std::vector<std::vector<TableColumn>> table_columns;
+    std::vector<TableRow> table_rows;
     int target = 0, table_fit_width = 0;
     Offset index = 0, count = 1, stride = 0;
 };
 
-constexpr double table_scale = .91;
-constexpr int table_pitch = 24;
-constexpr int cell_padding = 6;
-constexpr int cell_minimum = 42;
-
-void set_table_font(PangoLayout* layout, bool bold, bool italic = false) {
-    auto* font = pango_font_description_from_string("monospace 12");
-    pango_font_description_set_size(font, int(12 * table_scale * PANGO_SCALE));
-    if (bold) pango_font_description_set_weight(font, PANGO_WEIGHT_BOLD);
-    if (italic) pango_font_description_set_style(font, PANGO_STYLE_ITALIC);
-    pango_layout_set_font_description(layout, font);
-    pango_font_description_free(font);
-}
-
-// Verify the actual proportional advance in the GTK context for all four
-// inline style combinations. Font fallbacks and Unicode use Pango shaping.
-int table_ascii_advance(PangoContext* context) {
-    std::unique_ptr<PangoLayout, decltype(&g_object_unref)> layout(pango_layout_new(context), g_object_unref);
-    std::array<char, 95> sample{};
-    for (unsigned i = 0; i < sample.size(); ++i) sample[i] = char(i + 32);
-    pango_layout_set_text(layout.get(), sample.data(), sample.size());
-    int advance = 0;
-    for (unsigned style = 0; style < 4; ++style) {
-        set_table_font(layout.get(), style & 1, style & 2);
-        auto* line = pango_layout_get_line_readonly(layout.get(), 0);
-        for (unsigned i = 1; i <= sample.size(); ++i) {
-            int x = 0;
-            pango_layout_line_index_to_x(line, i, FALSE, &x);
-            if (!advance) advance = x;
-            if (x != int(i) * advance) return 0;
-        }
-    }
-    return advance % PANGO_SCALE == 0 ? advance / PANGO_SCALE : 0;
-}
+constexpr int cell_padding = 10;
+constexpr int table_pitch = 2 * cell_padding;
+constexpr int cell_minimum = 28;
+constexpr int row_padding = 6;
+constexpr int table_spacing = 5;
+constexpr char table_font[] = "Sans 11";
 
 std::size_t utf8_prefix(std::string_view text, std::size_t limit) {
     auto length = std::min(text.size(), limit);
     while (length < text.size() && (static_cast<unsigned char>(text[length]) & 0xc0) == 0x80) --length;
     return length;
+}
+
+// Cell content can include tabs and Unicode line breaks through character
+// references. Preserve byte offsets for the model's inline spans.
+std::string_view cell_text(std::string_view text, std::string& normalized) {
+    normalized.clear();
+    for (auto at = text.find_first_of("\t\n\v\f\r\xc2\xe2"); at != text.npos;
+         at = text.find_first_of("\t\n\v\f\r\xc2\xe2", at + 1)) {
+        std::string_view space;
+        if (static_cast<unsigned char>(text[at]) < 128) space = " ";
+        else if (text.substr(at, 2) == "\xc2\x85") space = "\xc2\xa0";
+        else if (text.substr(at, 3) == "\xe2\x80\xa8" || text.substr(at, 3) == "\xe2\x80\xa9")
+            space = "\xe2\x80\x85";
+        if (!space.empty()) {
+            if (normalized.empty()) normalized.assign(text);
+            normalized.replace(at, space.size(), space);
+        }
+    }
+    return normalized.empty() ? text : std::string_view(normalized);
 }
 
 bool starts_right_to_left(std::string_view text) {
@@ -263,16 +266,10 @@ class TableText {
     std::unordered_map<std::string_view, int> plain_widths_[2];
     std::string normalized_;
     double dpi_;
-    int ascii_advance_;
     bool heading_ = false;
 
 public:
-    TableText(double dpi, int ascii_advance) : dpi_(dpi), ascii_advance_(ascii_advance) {}
-
-    int ascii_advance(std::string_view text) const {
-        return ascii_advance_ && std::all_of(text.begin(), text.end(), [](unsigned char c) { return c >= 32 && c < 127; })
-             ? ascii_advance_ : 0;
-    }
+    explicit TableText(double dpi) : dpi_(dpi) {}
 
     PangoLayout* layout(std::string_view text, unsigned begin, unsigned span,
                         const MarkdownModel& model, int width, bool heading) {
@@ -287,7 +284,10 @@ public:
             heading_ = !heading;
         }
         if (heading_ != heading) {
-            set_table_font(layout_.get(), heading);
+            auto* font = pango_font_description_from_string(table_font);
+            if (heading) pango_font_description_set_weight(font, PANGO_WEIGHT_BOLD);
+            pango_layout_set_font_description(layout_.get(), font);
+            pango_font_description_free(font);
             heading_ = heading;
         }
         PangoAttrList* attrs = nullptr;
@@ -302,23 +302,19 @@ public:
             const auto& s = model.spans[span];
             if (s.end <= begin) continue;
             if ((s.style & MdStrong) && !heading) add(pango_attr_weight_new(PANGO_WEIGHT_BOLD), s);
-            if (s.style & MdEmphasis) add(pango_attr_style_new(PANGO_STYLE_ITALIC), s);
+            if (s.style & (MdEmphasis | MdImage)) add(pango_attr_style_new(PANGO_STYLE_ITALIC), s);
+            if (s.style & MdCode) add(pango_attr_family_new("monospace"), s);
         }
         pango_layout_set_attributes(layout_.get(), attrs);
         if (attrs) pango_attr_list_unref(attrs);
         pango_layout_set_width(layout_.get(), width < 0 ? -1 : width * PANGO_SCALE);
-        if (text.find_first_of("\t\n\r") != text.npos) {
-            normalized_.assign(text);
-            for (auto& c : normalized_) if (c == '\t' || c == '\n' || c == '\r') c = ' ';
-            text = normalized_;
-        }
+        text = cell_text(text, normalized_);
         pango_layout_set_text(layout_.get(), text.data(), static_cast<int>(text.size()));
         return layout_.get();
     }
 
     int width(std::string_view text, unsigned begin, unsigned span, const MarkdownModel& model, bool heading) {
         if (text.empty()) return 0;
-        if (const auto advance = ascii_advance(text)) return int(text.size()) * advance;
         const bool plain = text.size() <= 96 && (span == model.spans.size() ||
                            model.spans[span].begin >= begin + text.size());
         auto& cache = plain_widths_[heading];
@@ -343,14 +339,15 @@ struct Formatter {
     int chars = 0;
     int table_width;
     TableText table_text;
+    std::string normalized_cell;
     std::unordered_multimap<std::size_t, unsigned> tab_indices;
     std::size_t display_cells = 0;
     bool table_limit = false;
 
     Formatter(Page& output, const MarkdownModel& input, fs::path document_path,
-              const std::function<bool()>& cancel, Offset source_target, int width, double dpi, int advance)
+              const std::function<bool()>& cancel, Offset source_target, int width, double dpi)
         : page(output), model(input), path(std::move(document_path)), cancelled(cancel), target(source_target),
-          table_width(width), table_text(dpi, advance) {}
+          table_width(width), table_text(dpi) {}
 
     void run(std::string_view value, unsigned image, Format format, unsigned link, unsigned diagram = none) {
         auto begin = static_cast<unsigned>(page.text.size());
@@ -375,13 +372,7 @@ struct Formatter {
 
     void text(std::string_view value, Format format, unsigned link = none) {
         if (format.tabs != none) {
-            // Tabs and line breaks in a cell are text, not column separators.
-            for (auto at = value.find_first_of("\t\n\r"); at != value.npos; at = value.find_first_of("\t\n\r")) {
-                run(value.substr(0, at), none, format, link);
-                run(" ", none, format, link);
-                value.remove_prefix(at + 1);
-            }
-            run(value, none, format, link);
+            run(cell_text(value, normalized_cell), none, format, link);
             return;
         }
         // Bound the work Pango has to do for a single pathological logical line.
@@ -441,29 +432,26 @@ struct Formatter {
     }
 
     unsigned table_tabs(const std::vector<int>& widths, unsigned first_cell) {
-        std::vector<TableTab> tabs;
-        tabs.reserve(widths.size() * 2 - 1);
+        std::vector<TableColumn> columns;
+        columns.reserve(widths.size());
         std::size_t hash = widths.size();
         int x = 0;
-        auto append = [&](int at, MarkdownAlign align) {
-            tabs.push_back({at, align});
-            hash = (hash * 16777619u) ^ (unsigned(at) * 4 + unsigned(align));
-        };
         for (unsigned c = 0; c < widths.size(); ++c) {
-            if (c) append(x - table_pitch / 2 - 4, MarkdownAlign::Left);
-            auto alignment = model.cells[first_cell + c].align;
-            const auto w = widths[c];
-            const auto offset = alignment == MarkdownAlign::Right ? w :
-                                alignment == MarkdownAlign::Center ? w / 2 : 0;
-            append(x + cell_padding + offset, alignment);
-            x += w + table_pitch;
+            const auto alignment = model.cells[first_cell + c].align;
+            const int width = widths[c];
+            const int offset = alignment == MarkdownAlign::Right ? width :
+                               alignment == MarkdownAlign::Center ? width / 2 : 0;
+            const int stop = x + cell_padding + offset;
+            x += width + table_pitch;
+            columns.push_back({stop, x, alignment});
+            hash = (hash * 16777619u) ^ (unsigned(width) * 4 + unsigned(alignment));
         }
         const auto [first, last] = tab_indices.equal_range(hash);
         for (auto it = first; it != last; ++it)
-            if (page.tab_sets[it->second] == tabs) return it->second;
-        auto id = static_cast<unsigned>(page.tab_sets.size());
+            if (page.table_columns[it->second] == columns) return it->second;
+        auto id = static_cast<unsigned>(page.table_columns.size());
         tab_indices.emplace(hash, id);
-        page.tab_sets.push_back(std::move(tabs));
+        page.table_columns.push_back(std::move(columns));
         return id;
     }
 
@@ -488,7 +476,6 @@ struct Formatter {
         measured.reserve(model.blocks[end - 1].cell_end - head.cell_begin);
         std::vector<int> preferred(columns, cell_minimum), minimum = preferred;
         int available = std::max(180, table_width - int(block_format(head).depth * 18));
-        const bool wrap = columns <= 12;
         for (auto i = start; i < end; ++i) {
             if (cancelled()) return end - 1;
             const auto& row = model.blocks[i];
@@ -504,12 +491,14 @@ struct Formatter {
                 int width = table_text.width(value.substr(0, prefix), c.begin, span, model, i == start);
                 const bool long_text = prefix < value.size();
                 if (long_text) width = std::max(width, available);
-                int image_width = 0;
+                int image_width = 0, widest_image = 0;
                 for (auto k = span; k < row.span_end && model.spans[k].begin < c.end; ++k) {
                     const auto& s = model.spans[k];
                     if (!(s.style & MdImage)) continue;
                     if (const auto index = image(s.destination); index != none) {
-                        image_width += gdk_pixbuf_get_width(page.images[index].get());
+                        const int pixels = gdk_pixbuf_get_width(page.images[index].get());
+                        image_width += pixels;
+                        widest_image = std::max(widest_image, pixels);
                         const auto alt_end = std::min<unsigned>(s.end, c.begin + prefix);
                         if (alt_end > s.begin)
                             width -= table_text.width(source.substr(s.begin, alt_end - s.begin), s.begin, k, model, i == start);
@@ -517,30 +506,30 @@ struct Formatter {
                 }
                 width = std::max(0, width) + image_width + 2; // GTK/Pango rounding slack.
                 preferred[col] = std::max(preferred[col], width);
-                if (image_width) minimum[col] = std::max(minimum[col], width);
+                // Leave prose enough room for several words even when the
+                // viewport is narrow. Tables wider than this can be scrolled.
+                minimum[col] = std::max({minimum[col], widest_image + 2, std::min(width, 104)});
                 measured.push_back({width, span, image_width != 0, long_text});
             }
         }
         std::vector<int> widths = preferred;
-        if (wrap) {
-            int natural = (table_pitch * int(columns)) + int(block_format(head).depth * 18);
-            for (auto width : preferred) natural += width;
-            page.table_fit_width = std::max(page.table_fit_width, natural);
-            const int budget = available - table_pitch * int(columns);
-            int lower = cell_minimum, upper = std::max(cell_minimum, budget);
-            while (lower < upper) {
-                const int cap = (lower + upper + 1) / 2;
-                int total = 0;
-                for (unsigned c = 0; c < columns; ++c)
-                    total += std::clamp(cap, minimum[c], preferred[c]);
-                if (total <= budget) lower = cap;
-                else upper = cap - 1;
-            }
+        int natural = (table_pitch * int(columns)) + int(block_format(head).depth * 18);
+        for (auto width : preferred) natural += width;
+        page.table_fit_width = std::max(page.table_fit_width, natural);
+        const int budget = available - table_pitch * int(columns);
+        int lower = cell_minimum, upper = std::max(cell_minimum, budget);
+        while (lower < upper) {
+            const int cap = (lower + upper + 1) / 2;
+            int total = 0;
             for (unsigned c = 0; c < columns; ++c)
-                widths[c] = std::clamp(lower, minimum[c], preferred[c]);
+                total += std::clamp(cap, minimum[c], preferred[c]);
+            if (total <= budget) lower = cap;
+            else upper = cap - 1;
         }
+        for (unsigned c = 0; c < columns; ++c)
+            widths[c] = std::clamp(lower, minimum[c], preferred[c]);
         const auto tabs = table_tabs(widths, head.cell_begin);
-        if (page.tab_sets[tabs].back().x > 65536) {
+        if (page.table_columns[tabs].back().right > 65536) {
             table_limit = true;
             return end - 1;
         }
@@ -559,6 +548,8 @@ struct Formatter {
             auto base = block_format(row);
             if (auto marker = model.marker(row); !marker.empty()) { text(marker, base); text("\n", base); }
             base.tabs = tabs;
+            base.last_table_row = i + 1 == end;
+            const int row_begin = chars;
             slices.clear();
             cells.clear();
             std::size_t height = 1;
@@ -568,36 +559,42 @@ struct Formatter {
                 const auto padding = slices.size();
                 const int width = widths[j - row.cell_begin];
                 auto value = source.substr(c.begin, c.end - c.begin);
-                if ((!size.long_text && size.width <= width) || size.has_image || value.empty()) {
+                if ((!size.long_text && size.width <= width) || value.empty()) {
                     slices.push_back({c.begin, c.end});
-                } else if (const auto advance = table_text.ascii_advance(value)) {
-                    const auto capacity = std::max(1, (width - 2) / advance);
-                    auto begin = c.begin;
-                    while (value.size() > std::size_t(capacity)) {
-                        if (cancelled()) return end - 1;
-                        auto length = value.substr(0, capacity).find_last_of(" \t\r\n");
-                        length = length == value.npos ? capacity : length + 1;
-                        slices.push_back({begin, begin + unsigned(length)});
-                        begin += length;
-                        value.remove_prefix(length);
-                    }
-                    slices.push_back({begin, c.end});
                 } else {
                     auto span = size.span;
-                    for (unsigned offset = c.begin; offset < c.end;) {
-                        if (cancelled()) return end - 1;
-                        auto remaining = source.substr(offset, c.end - offset);
-                        const auto length = utf8_prefix(remaining, 4096);
-                        while (span < row.span_end && model.spans[span].end <= offset) ++span;
-                        auto* layout = table_text.layout(remaining.substr(0, length), offset, span, model,
-                                                        width - 2, i == start);
-                        for (auto* list = pango_layout_get_lines_readonly(layout); list; list = list->next) {
-                            auto* line = static_cast<const PangoLayoutLine*>(list->data);
-                            const auto first = offset + static_cast<unsigned>(line->start_index);
-                            slices.push_back({first, first + static_cast<unsigned>(line->length)});
+                    auto wrap_text = [&](unsigned offset, unsigned end) {
+                        while (offset < end && !cancelled()) {
+                            auto remaining = source.substr(offset, end - offset);
+                            const auto length = utf8_prefix(remaining, 4096);
+                            while (span < row.span_end && model.spans[span].end <= offset) ++span;
+                            auto* layout = table_text.layout(remaining.substr(0, length), offset, span, model,
+                                                            width - 2, i == start);
+                            for (auto* list = pango_layout_get_lines_readonly(layout); list; list = list->next) {
+                                auto* line = static_cast<const PangoLayoutLine*>(list->data);
+                                const auto first = offset + static_cast<unsigned>(line->start_index);
+                                slices.push_back({first, first + static_cast<unsigned>(line->length)});
+                            }
+                            offset += length;
                         }
-                        offset += length;
+                    };
+                    // A decoded image is one unbreakable object in the view,
+                    // irrespective of the length or shaping of its alt text.
+                    auto begin = c.begin;
+                    if (size.has_image) {
+                        for (auto k = span; k < row.span_end && model.spans[k].begin < c.end; ++k) {
+                            const auto& item = model.spans[k];
+                            if (!(item.style & MdImage) || image(item.destination) == none) continue;
+                            auto stop = item.begin;
+                            while (stop > begin && source[stop - 1] == ' ') --stop;
+                            wrap_text(begin, stop);
+                            slices.push_back({item.begin, item.end});
+                            begin = item.end;
+                            while (begin < c.end && source[begin] == ' ') ++begin;
+                        }
                     }
+                    wrap_text(begin, c.end);
+                    if (cancelled()) return end - 1;
                 }
                 cells.push_back({padding, slices.size() - padding, size.span});
                 height = std::max(height, cells.back().count);
@@ -615,16 +612,20 @@ struct Formatter {
                 run("\xe2\x80\x8e", none, base, none); // LRM.
             for (std::size_t line = 0; line < height; ++line) {
                 for (unsigned j = 0; j < cells.size(); ++j) {
-                    run(j ? "\t│\t" : "\t", none, base, none);
+                    run("\t", none, base, none);
                     auto& cell = cells[j];
                     if (line < cell.count) {
                         auto range = slices[cell.first + line];
                         inlines(range.begin, range.end, cell.span, row.span_end, base);
                     }
                 }
-                if (line + 1 < height) run("\xe2\x80\xa8", none, base, none); // Pango soft line break.
+                // Close the last tab field before the soft break. Pango
+                // otherwise includes the break in center/right alignment.
+                run("\t", none, base, none);
+                if (line + 1 < height) run("\xe2\x80\xa8", none, base, none);
                 else if (i + 1 < model.blocks.size()) run("\n", none, base, none);
             }
+            page.table_rows.push_back({row_begin, chars, tabs, i == start, (i - start) % 2 == 0, base.last_table_row});
             line_chars = 0;
         }
         return end - 1;
@@ -717,7 +718,7 @@ Page prepare(const Request& req, const std::function<bool()>& cancelled) {
         if (cancelled()) return {};
         if (model && Formatter{result, *model, req.document.path(), cancelled,
                                req.locate && offset >= start ? offset - start : 0,
-                               req.table_width, req.dpi, req.ascii_advance}.build()) {
+                               req.table_width, req.dpi}.build()) {
             result.destinations = std::move(model->destinations);
             return result;
         }
@@ -733,8 +734,9 @@ Page prepare(const Request& req, const std::function<bool()>& cancelled) {
 // Exactly one worker per active preview. Rapid edits overwrite the pending
 // snapshot. Workers own no widgets and can finish after window destruction.
 class Worker : public std::enable_shared_from_this<Worker> {
+    using Job = std::variant<Request, DiagramRequest>;
     std::mutex mutex_;
-    std::optional<Request> next_;
+    std::optional<Job> next_;
     std::optional<Page> ready_;
     std::atomic<std::uint64_t> generation_{0};
     std::optional<MermaidRenderer> mermaid_;
@@ -748,35 +750,44 @@ class Worker : public std::enable_shared_from_this<Worker> {
         }, task, +[](gpointer data) { delete static_cast<std::function<void()>*>(data); });
     }
 
+    void render_diagrams(const DiagramRequest& job, const std::function<bool()>& cancelled) {
+        if (!mermaid_) mermaid_.emplace();
+        for (unsigned index = 0; index < job.sources.size() && !cancelled(); ++index) {
+            MermaidResult rendered;
+            try { rendered = mermaid_->render(job.sources[index], job.palette, cancelled); }
+            catch (const std::exception&) {}
+            if (cancelled()) break;
+            notify([callback = job.notify, index, rendered = std::move(rendered)]() mutable {
+                callback(index, std::move(rendered));
+            });
+        }
+    }
+
     void process() {
         for (;;) {
-            std::optional<Request> current;
+            std::optional<Job> current;
+            std::uint64_t revision;
             {
                 std::lock_guard lock(mutex_);
                 if (!next_) { running_ = false; return; }
                 current.swap(next_);
+                revision = generation_.load();
             }
-            auto cancelled = [&] { return generation_.load() != current->generation; };
+            auto cancelled = [&] { return generation_.load() != revision; };
+            if (const auto* diagrams = std::get_if<DiagramRequest>(&*current)) {
+                render_diagrams(*diagrams, cancelled);
+                continue;
+            }
+            auto& request = std::get<Request>(*current);
             Page result;
-            try { result = prepare(*current, cancelled); }
+            try { result = prepare(request, cancelled); }
             catch (const std::exception& e) { result.error = e.what(); }
-            const auto diagrams = result.diagrams;
             {
                 std::lock_guard lock(mutex_);
                 if (cancelled()) continue;
                 ready_ = std::move(result);
             }
-            notify(std::move(current->notify));
-            if (!diagrams.empty() && !mermaid_) mermaid_.emplace();
-            for (unsigned index = 0; index < diagrams.size() && !cancelled(); ++index) {
-                MermaidResult rendered;
-                try { rendered = mermaid_->render(diagrams[index], cancelled); }
-                catch (const std::exception&) {}
-                if (cancelled()) break;
-                notify([callback = current->notify_diagram, index, rendered = std::move(rendered)]() mutable {
-                    callback(index, std::move(rendered));
-                });
-            }
+            notify(std::move(request.notify));
         }
     }
 public:
@@ -786,9 +797,9 @@ public:
         next_.reset();
         ready_.reset();
     }
-    void submit(Request request) {
+    void submit(Job request) {
         std::lock_guard lock(mutex_);
-        request.generation = ++generation_;
+        ++generation_;
         next_ = std::move(request);
         ready_.reset();
         if (!running_) {
@@ -804,20 +815,41 @@ public:
         return result;
     }
 };
+// GtkTextView draws this layer in buffer coordinates, after its CSS background
+// and before native selections, text, links and inline images.
+struct PreviewTextView {
+    GtkTextView parent;
+    void (*draw_tables)(void*, cairo_t*);
+    void* owner;
+};
+struct PreviewTextViewClass { GtkTextViewClass parent; };
+G_DEFINE_TYPE(PreviewTextView, preview_text_view, GTK_TYPE_TEXT_VIEW)
+
+void preview_text_view_init(PreviewTextView*) {}
+
+void preview_text_view_class_init(PreviewTextViewClass* klass) {
+    GTK_TEXT_VIEW_CLASS(klass)->draw_layer = +[](GtkTextView* view, GtkTextViewLayer layer, cairo_t* cr) {
+        auto* parent = GTK_TEXT_VIEW_CLASS(preview_text_view_parent_class);
+        if (parent->draw_layer) parent->draw_layer(view, layer, cr);
+        auto* preview = reinterpret_cast<PreviewTextView*>(view);
+        if (layer == GTK_TEXT_VIEW_LAYER_BELOW_TEXT && preview->draw_tables)
+            preview->draw_tables(preview->owner, cr);
+    };
+}
 } // namespace
 
 struct MarkdownPreview::Impl {
     GtkWidget *box, *bar, *status, *previous, *next, *view;
+    Palette palette = default_palette(true);
+    GtkCssProvider* css = gtk_css_provider_new();
     GtkTextTagTable* table = gtk_text_tag_table_new();
     std::array<GtkTextTag*, 7> headings{};
     std::array<GtkTextTag*, 9> indents{};
     std::vector<GtkTextTag*> row_tabs;
     guint reflow_timer = 0;
     int rendered_width = 0;
-    guint table_font_serial = 0;
-    int ascii_advance = 0;
     std::optional<int> reflow_position;
-    GtkTextTag *paragraph, *code, *html, *rule, *table_row, *table_head, *quote;
+    GtkTextTag *paragraph, *code, *html, *rule, *table_row, *table_head, *table_last, *quote;
     GtkTextTag *emphasis, *strong, *inline_code, *strike, *link, *alt;
     std::shared_ptr<Worker> worker = std::make_shared<Worker>();
     std::optional<Document> document;
@@ -828,8 +860,11 @@ struct MarkdownPreview::Impl {
     std::size_t run_index = 0;
     unsigned run_byte = 0;
     std::uint64_t diagram_generation = 0;
+    struct DiagramAnchor { GtkWidget* box; GtkTextChildAnchor* anchor; unsigned depth; };
     std::vector<std::optional<MermaidResult>> diagram_results;
-    std::vector<std::vector<GtkWidget*>> diagram_widgets;
+    std::vector<std::vector<DiagramAnchor>> diagram_widgets;
+    guint diagram_resize = 0;
+    int diagram_view_width = 0;
     // Only the main thread dereferences this token. A worker may already have
     // queued its GLib notification when the window closes.
     std::shared_ptr<Impl*> receiver = std::make_shared<Impl*>(this);
@@ -857,10 +892,15 @@ struct MarkdownPreview::Impl {
         auto* scroll = gtk_scrolled_window_new(nullptr, nullptr);
         gtk_box_pack_start(GTK_BOX(box), scroll, TRUE, TRUE, 0);
         auto* buffer = gtk_text_buffer_new(table);
-        view = gtk_text_view_new_with_buffer(buffer);
+        auto* preview_text = static_cast<PreviewTextView*>(g_object_new(preview_text_view_get_type(),
+                                                                       "buffer", buffer, nullptr));
+        preview_text->owner = this;
+        preview_text->draw_tables = +[](void* owner, cairo_t* cr) { static_cast<Impl*>(owner)->draw_tables(cr); };
+        view = GTK_WIDGET(preview_text);
         gtk_widget_set_name(view, "markdown-text");
         g_signal_connect(view, "size-allocate", G_CALLBACK(+[](GtkWidget*, GtkAllocation*, Impl* self) {
             self->schedule_table_reflow();
+            self->schedule_diagram_resize();
         }), this);
         gtk_container_add(GTK_CONTAINER(scroll), view);
         auto* text_view = GTK_TEXT_VIEW(view);
@@ -871,13 +911,8 @@ struct MarkdownPreview::Impl {
         gtk_text_view_set_right_margin(text_view, 28);
         gtk_text_view_set_top_margin(text_view, 16);
         gtk_text_view_set_bottom_margin(text_view, 24);
-        auto css = gtk_css_provider_new();
-        gtk_css_provider_load_from_data(css,
-            "textview, textview text { background-color: #1d2329; color: #dce3e6; font: 12pt sans-serif; }"
-            "textview text selection { color: white; background-color: #406c76; }", -1, nullptr);
         gtk_style_context_add_provider(gtk_widget_get_style_context(view), GTK_STYLE_PROVIDER(css),
                                        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-        g_object_unref(css);
         paragraph = gtk_text_buffer_create_tag(buffer, "md-paragraph", "pixels-above-lines", 3,
                                                "pixels-below-lines", 5, nullptr);
         double scales[] = {1, 1.85, 1.5, 1.28, 1.13, 1., .95};
@@ -889,26 +924,24 @@ struct MarkdownPreview::Impl {
         for (unsigned i = 1; i < indents.size(); ++i) {
             indents[i] = gtk_text_buffer_create_tag(buffer, nullptr, "left-margin", int(28 + 18 * i), nullptr);
         }
-        quote = gtk_text_buffer_create_tag(buffer, "md-quote", "foreground", "#a1bbc5",
-                                            "paragraph-background", "#232e36", nullptr);
+        quote = gtk_text_buffer_create_tag(buffer, "md-quote", nullptr);
         code = gtk_text_buffer_create_tag(buffer, "md-code-block", "family", "monospace",
-            "scale", .93, "paragraph-background", "#151a20", "foreground", "#dbd5bd", nullptr);
-        html = gtk_text_buffer_create_tag(buffer, "md-html", "family", "monospace",
-                                          "foreground", "#b0b9c2", nullptr);
-        rule = gtk_text_buffer_create_tag(buffer, "md-rule", "foreground", "#66757a", nullptr);
-        table_row = gtk_text_buffer_create_tag(buffer, "md-cell", "family", "monospace", "scale", table_scale,
-            "paragraph-background", "#222b32", "wrap-mode", GTK_WRAP_NONE, "direction", GTK_TEXT_DIR_LTR,
-            "pixels-above-lines", 1, "pixels-below-lines", 1, nullptr);
+            "scale", .93, nullptr);
+        html = gtk_text_buffer_create_tag(buffer, "md-html", "family", "monospace", nullptr);
+        rule = gtk_text_buffer_create_tag(buffer, "md-rule", nullptr);
+        table_row = gtk_text_buffer_create_tag(buffer, "md-cell", "font", table_font,
+            "wrap-mode", GTK_WRAP_NONE, "direction", GTK_TEXT_DIR_LTR,
+            "pixels-above-lines", row_padding, "pixels-below-lines", row_padding, "pixels-inside-wrap", 1, nullptr);
         table_head = gtk_text_buffer_create_tag(buffer, "md-table-head", "weight", PANGO_WEIGHT_BOLD,
-            "foreground", "#b0dccc", "paragraph-background", "#2c373e", "pixels-below-lines", 3, nullptr);
+            "pixels-above-lines", row_padding + table_spacing, nullptr);
+        table_last = gtk_text_buffer_create_tag(buffer, nullptr, "pixels-below-lines", row_padding + table_spacing, nullptr);
         emphasis = gtk_text_buffer_create_tag(buffer, "md-em", "style", PANGO_STYLE_ITALIC, nullptr);
         strong = gtk_text_buffer_create_tag(buffer, "md-strong", "weight", PANGO_WEIGHT_BOLD, nullptr);
-        inline_code = gtk_text_buffer_create_tag(buffer, "md-code", "family", "monospace",
-                                                 "background", "#303941", "foreground", "#efddb7", nullptr);
+        inline_code = gtk_text_buffer_create_tag(buffer, "md-code", "family", "monospace", nullptr);
         strike = gtk_text_buffer_create_tag(buffer, "md-strike", "strikethrough", TRUE, nullptr);
         alt = gtk_text_buffer_create_tag(buffer, "md-alt", "style", PANGO_STYLE_ITALIC, nullptr);
-        link = gtk_text_buffer_create_tag(buffer, "md-link", "underline", PANGO_UNDERLINE_SINGLE,
-                                          "foreground", "#87daca", nullptr);
+        link = gtk_text_buffer_create_tag(buffer, "md-link", "underline", PANGO_UNDERLINE_SINGLE, nullptr);
+        apply_colors();
         g_object_unref(buffer);
 
         g_signal_connect(box, "destroy", G_CALLBACK(+[](GtkWidget*, Impl* self) {
@@ -962,6 +995,24 @@ struct MarkdownPreview::Impl {
         if (!destroyed) gtk_widget_destroy(box);
         g_object_unref(box);
         g_object_unref(table);
+        g_object_unref(css);
+    }
+
+    void apply_colors() {
+        const auto style = "#markdown-text, #markdown-text text { background-color: " + palette.background +
+            "; color: " + palette.text + "; font: 12pt sans-serif; }"
+            "#markdown-text selection { background-color: " + palette.selection +
+            "; color: " + palette.selection_text + "; }";
+        gtk_css_provider_load_from_data(css, style.c_str(), style.size(), nullptr);
+        g_object_set(quote, "foreground", palette.muted.c_str(), "paragraph-background", palette.surface.c_str(), nullptr);
+        g_object_set(code, "foreground", palette.code_text.c_str(), "paragraph-background", palette.surface.c_str(), nullptr);
+        g_object_set(html, "foreground", palette.code_text.c_str(), nullptr);
+        g_object_set(rule, "foreground", palette.border.c_str(), nullptr);
+        g_object_set(table_row, "foreground", palette.text.c_str(), nullptr);
+        g_object_set(table_head, "foreground", palette.text.c_str(), nullptr);
+        g_object_set(inline_code, "foreground", palette.code_text.c_str(), "background", palette.raised.c_str(), nullptr);
+        g_object_set(link, "foreground", palette.accent.c_str(), nullptr);
+        gtk_widget_queue_draw(view);
     }
 
     GtkTextBuffer* buffer() const { return gtk_text_view_get_buffer(GTK_TEXT_VIEW(view)); }
@@ -973,7 +1024,8 @@ struct MarkdownPreview::Impl {
 
     int available_width() const {
         const int allocated = gtk_widget_get_allocated_width(view);
-        return allocated > 1 ? std::max(180, allocated - 72) : 760;
+        return allocated > 1 ? std::max(180, allocated - gtk_text_view_get_left_margin(GTK_TEXT_VIEW(view)) -
+            gtk_text_view_get_right_margin(GTK_TEXT_VIEW(view))) : 760;
     }
 
     void schedule_table_reflow() {
@@ -999,6 +1051,7 @@ struct MarkdownPreview::Impl {
 
     void stop() {
         cancel_reflow();
+        if (diagram_resize) { g_source_remove(diagram_resize); diagram_resize = 0; }
         if (source) { g_source_remove(source); source = 0; }
         ++diagram_generation;
         diagram_widgets.clear();
@@ -1040,20 +1093,17 @@ struct MarkdownPreview::Impl {
         gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(view), FALSE);
         auto* font_context = gtk_widget_get_pango_context(view);
         const auto dpi = pango_cairo_context_get_resolution(font_context);
-        if (const guint serial = pango_context_get_serial(font_context); serial != table_font_serial) {
-            table_font_serial = serial;
-            ascii_advance = table_ascii_advance(font_context);
-        }
         rendered_width = available_width();
-        worker->submit({document->snapshot(), index, offset, locate, stride, 0, [token = receiver, revision] {
+        worker->submit(Request{document->snapshot(), index, offset, locate, stride, [token = receiver, revision] {
             auto* self = *token;
             if (!self || self->diagram_generation != revision) return;
             auto result = self->worker->take();
             if (!result) return;
             self->page = std::move(result);
-            self->row_tabs.resize(self->page->tab_sets.size());
+            self->row_tabs.resize(self->page->table_columns.size());
             self->diagram_widgets.resize(self->page->diagrams.size());
             self->diagram_results.resize(self->page->diagrams.size());
+            self->refresh_diagrams();
             if (!self->batch()) { self->finish(); return; }
             self->source = g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, +[](gpointer data) -> gboolean {
                 auto* self = static_cast<Impl*>(data);
@@ -1062,24 +1112,89 @@ struct MarkdownPreview::Impl {
                 self->finish();
                 return G_SOURCE_REMOVE;
             }, self, nullptr);
-        }, rendered_width, dpi, ascii_advance, [token = receiver, revision](unsigned index, MermaidResult result) {
+        }, rendered_width, dpi});
+    }
+
+    void refresh_diagrams() {
+        if (!page || page->diagrams.empty()) return;
+        const auto revision = ++diagram_generation;
+        worker->submit(DiagramRequest{page->diagrams, palette, [token = receiver, revision](unsigned index, MermaidResult result) {
             auto* self = *token;
             if (!self || self->diagram_generation != revision) return;
-            if (index >= self->diagram_results.size()) self->diagram_results.resize(index + 1);
-            self->diagram_results[index] = std::move(result);
-            if (index < self->diagram_widgets.size())
-                for (auto* widget : self->diagram_widgets[index]) self->present_diagram(index, widget);
+            auto& previous = self->diagram_results[index];
+            if (previous && previous->status == result.status && previous->image == result.image) return;
+            previous = std::move(result);
+            for (const auto& widget : self->diagram_widgets[index]) self->present_diagram(index, widget);
         }});
     }
 
-    void present_diagram(unsigned index, GtkWidget* box) {
-        auto* child = gtk_bin_get_child(GTK_BIN(box));
-        if (child) gtk_widget_destroy(child);
+    int diagram_width(const DiagramAnchor& anchor, GdkPixbuf* original) const {
+        auto* text = GTK_TEXT_VIEW(view);
+        const auto width = gtk_widget_get_allocated_width(view);
+        const int margins = gtk_text_view_get_left_margin(text) + gtk_text_view_get_right_margin(text);
+        const int available = width > 1 ? width - margins - 18 * int(anchor.depth) : 720;
+        return std::min(gdk_pixbuf_get_width(original), std::max(1, available));
+    }
+
+    void fit_diagram(GtkImage* image, GdkPixbuf* original, int width) {
+        if (width == gdk_pixbuf_get_width(original)) {
+            gtk_image_set_from_pixbuf(image, original);
+            return;
+        }
+        int height = std::max(1, (gdk_pixbuf_get_height(original) * width + gdk_pixbuf_get_width(original) / 2) /
+                                 gdk_pixbuf_get_width(original));
+        auto* scaled = gdk_pixbuf_scale_simple(original, width, height, GDK_INTERP_BILINEAR);
+        gtk_image_set_from_pixbuf(image, scaled);
+        g_object_unref(scaled);
+    }
+
+    void relayout_diagram(const DiagramAnchor& anchor) {
+        // GTK 3 can keep the placeholder's old Pango shape after an anchored
+        // child changes requisition. Reattaching invalidates this line only.
+        if (!gtk_widget_get_visible(anchor.box)) return;
+        g_object_ref(anchor.box);
+        gtk_container_remove(GTK_CONTAINER(view), anchor.box);
+        gtk_text_view_add_child_at_anchor(GTK_TEXT_VIEW(view), anchor.box, anchor.anchor);
+        g_object_unref(anchor.box);
+    }
+
+    void schedule_diagram_resize() {
+        int width = gtk_widget_get_allocated_width(view);
+        if (width == diagram_view_width) return;
+        diagram_view_width = width;
+        if (diagram_widgets.empty() || diagram_resize) return;
+        diagram_resize = g_idle_add_full(G_PRIORITY_HIGH_IDLE, +[](gpointer data) -> gboolean {
+            auto* self = static_cast<Impl*>(data);
+            self->diagram_resize = 0;
+            for (unsigned i = 0; i < self->diagram_widgets.size(); ++i) {
+                const auto& result = self->diagram_results[i];
+                if (!result || !result->image) continue;
+                for (const auto& anchor : self->diagram_widgets[i]) {
+                    auto* image = GTK_IMAGE(gtk_bin_get_child(GTK_BIN(anchor.box)));
+                    const auto target = self->diagram_width(anchor, result->image.get());
+                    if (gdk_pixbuf_get_width(gtk_image_get_pixbuf(image)) == target) continue;
+                    self->fit_diagram(image, result->image.get(), target);
+                    self->relayout_diagram(anchor);
+                }
+            }
+            return G_SOURCE_REMOVE;
+        }, this, nullptr);
+    }
+
+    void present_diagram(unsigned index, const DiagramAnchor& anchor) {
+        auto* child = gtk_bin_get_child(GTK_BIN(anchor.box));
         const auto& result = diagram_results[index];
+        if (GTK_IS_IMAGE(child) && result && result->image) {
+            fit_diagram(GTK_IMAGE(child), result->image.get(), diagram_width(anchor, result->image.get()));
+            relayout_diagram(anchor);
+            return;
+        }
+        if (child) gtk_widget_destroy(child);
         if (!result) {
             child = gtk_label_new("Rendering Mermaid diagram…");
         } else if (result->image) {
-            child = gtk_image_new_from_pixbuf(result->image.get());
+            child = gtk_image_new();
+            fit_diagram(GTK_IMAGE(child), result->image.get(), diagram_width(anchor, result->image.get()));
             gtk_widget_set_name(child, "markdown-mermaid-image");
             atk_object_set_name(gtk_widget_get_accessible(child), "Mermaid diagram");
         } else {
@@ -1094,21 +1209,68 @@ struct MarkdownPreview::Impl {
             gtk_container_add(GTK_CONTAINER(child), label);
             gtk_widget_show(label);
         }
-        gtk_container_add(GTK_CONTAINER(box), child);
+        gtk_container_add(GTK_CONTAINER(anchor.box), child);
         gtk_widget_show(child);
+        relayout_diagram(anchor);
+    }
+
+    void draw_tables(cairo_t* cr) const {
+        if (!page || page->table_rows.empty()) return;
+        auto* text = GTK_TEXT_VIEW(view);
+        double x1, y1, x2, y2;
+        cairo_clip_extents(cr, &x1, &y1, &x2, &y2);
+        GtkTextIter top;
+        gtk_text_view_get_line_at_y(text, &top, static_cast<int>(y1), nullptr);
+        const auto& rows = page->table_rows;
+        auto row = std::lower_bound(rows.begin(), rows.end(), gtk_text_iter_get_offset(&top),
+            [](const TableRow& candidate, int pos) { return candidate.end <= pos; });
+        const int inserted = gtk_text_buffer_get_char_count(buffer());
+        GdkRGBA header, stripe, border;
+        gdk_rgba_parse(&header, palette.raised.c_str());
+        gdk_rgba_parse(&stripe, palette.surface.c_str());
+        gdk_rgba_parse(&border, palette.border.c_str());
+        for (; row != rows.end() && row->begin < inserted; ++row) {
+            GtkTextIter begin;
+            gtk_text_buffer_get_iter_at_offset(buffer(), &begin, row->begin);
+            int y = 0, height = 0;
+            gtk_text_view_get_line_yrange(text, &begin, &y, &height);
+            if (y >= y2) break;
+            if (row->header) { y += table_spacing; height -= table_spacing; }
+            if (row->last) height -= table_spacing;
+            const auto& columns = page->table_columns[row->columns];
+            GdkRectangle first;
+            gtk_text_view_get_iter_location(text, &begin, &first);
+            const int left = first.x;
+            const int width = columns.back().right;
+            if (row->header || row->stripe) {
+                gdk_cairo_set_source_rgba(cr, row->header ? &header : &stripe);
+                cairo_rectangle(cr, left, y, width, height);
+                cairo_fill(cr);
+            }
+            // Use filled one-pixel rules, including the outside edges, so
+            // adjacent cells share a single border at every scale factor.
+            gdk_cairo_set_source_rgba(cr, &border);
+            if (row->header) cairo_rectangle(cr, left, y, width, 1);
+            cairo_rectangle(cr, left, y + height - 1, width, 1);
+            cairo_rectangle(cr, left, y, 1, height);
+            for (const auto& col : columns)
+                cairo_rectangle(cr, left + col.right - 1, y, 1, height);
+            cairo_fill(cr);
+        }
     }
 
     GtkTextTag* table_tab_tag(unsigned index) {
         auto*& tag = row_tabs[index];
         if (tag) return tag;
-        const auto& stops = page->tab_sets[index];
-        auto* tabs = pango_tab_array_new(static_cast<int>(stops.size()), TRUE);
+        const auto& stops = page->table_columns[index];
+        auto* tabs = pango_tab_array_new(static_cast<int>(stops.size()) + 1, TRUE);
         for (unsigned i = 0; i < stops.size(); ++i) {
             auto align = PANGO_TAB_LEFT;
             if (stops[i].align == MarkdownAlign::Center) align = PANGO_TAB_CENTER;
             if (stops[i].align == MarkdownAlign::Right) align = PANGO_TAB_RIGHT;
-            pango_tab_array_set_tab(tabs, i, align, stops[i].x);
+            pango_tab_array_set_tab(tabs, i, align, stops[i].stop);
         }
+        pango_tab_array_set_tab(tabs, stops.size(), PANGO_TAB_LEFT, stops.back().right);
         tag = gtk_text_buffer_create_tag(buffer(), nullptr, "tabs", tabs, nullptr);
         pango_tab_array_free(tabs);
         return tag;
@@ -1126,8 +1288,9 @@ struct MarkdownPreview::Impl {
         default: add(paragraph); break;
         }
         if (f.depth) add(indents[f.depth]);
-        if (f.quoted) add(quote);
+        if (f.quoted && f.tabs == none) add(quote);
         if (f.tabs != none) add(table_tab_tag(f.tabs));
+        if (f.last_table_row) add(table_last);
     }
 
     void apply_inline(Format f, GtkTextIter& begin, GtkTextIter& end) {
@@ -1159,8 +1322,8 @@ struct MarkdownPreview::Impl {
                     gtk_event_box_set_visible_window(GTK_EVENT_BOX(widget), FALSE);
                     gtk_widget_set_name(widget, "markdown-mermaid");
                     gtk_text_view_add_child_at_anchor(GTK_TEXT_VIEW(view), widget, anchor);
-                    diagram_widgets[first_run.diagram].push_back(widget);
-                    present_diagram(first_run.diagram, widget);
+                    auto& slot = diagram_widgets[first_run.diagram].emplace_back(widget, anchor, first_run.format.depth);
+                    present_diagram(first_run.diagram, slot);
                     gtk_widget_show(widget);
                 } else {
                     gtk_text_buffer_insert_pixbuf(buffer(), &end, page->images[first_run.image].get());
@@ -1244,7 +1407,6 @@ struct MarkdownPreview::Impl {
         } else scroll(page->target);
         std::vector<Run>().swap(page->runs);
         std::vector<Pixbuf>().swap(page->images);
-        std::vector<std::vector<TableTab>>().swap(page->tab_sets);
         std::string().swap(page->text);
         g_object_set_data(G_OBJECT(box), "markdown-ready", GINT_TO_POINTER(1));
         schedule_table_reflow();
@@ -1315,6 +1477,12 @@ struct MarkdownPreview::Impl {
 MarkdownPreview::MarkdownPreview() : impl_(std::make_unique<Impl>()) {}
 MarkdownPreview::~MarkdownPreview() = default;
 GtkWidget* MarkdownPreview::widget() const { return impl_->box; }
+void MarkdownPreview::set_palette(const Palette& palette) {
+    if (impl_->destroyed || impl_->palette == palette) return;
+    impl_->palette = palette;
+    impl_->apply_colors();
+    impl_->refresh_diagrams();
+}
 void MarkdownPreview::show(Document snapshot, Offset offset, std::string fragment) {
     if (impl_->destroyed) return;
     impl_->document = std::move(snapshot);

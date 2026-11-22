@@ -50,6 +50,8 @@ sh packaging/install-mermaid.sh
 
 Right-click a selection for the edit menu. Use Command for the primary shortcuts on macOS. In the sidebar, press Enter to open the first search result or click a result to select it. Content hits select the matching bytes. Escape in the search field clears the query and restores the directory tree. Use the refresh button to pick up filesystem changes.
 
+Open **Edit → Appearance…** with **Ctrl+,** on Linux or **Command+,** on macOS. Choose Dark or Light and adjust the document background, panels, text, secondary text, accents, or code color. Changes preview immediately. **Save** remembers the colors for each mode, and **Cancel** restores the previous appearance.
+
 ## Markdown
 
 Open a `.md` or `.markdown` file to read it. Use **Source** to edit and **Preview** to see the current unsaved text. Both controls sit on the tab strip. Choosing a content-search result opens Source with the matching bytes selected.
@@ -60,7 +62,7 @@ Ordinary documents render in full. Files over 1 MiB and unusually dense or long-
 
 ### Tables and Mermaid diagrams
 
-Tables support left, center, and right column alignment, inline formatting, and wrapping of long cell text. Use a fenced block labeled `mermaid` to embed a diagram. This example renders directly in Preview.
+Tables have aligned columns, grid lines, a shaded header, selectable text, and wrapping within cells. Wide tables scroll horizontally. Mermaid diagrams use a transparent canvas and follow the active palette. Use a fenced block labeled `mermaid` to embed a diagram.
 
 ```mermaid
 flowchart LR

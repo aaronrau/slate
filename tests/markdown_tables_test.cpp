@@ -1,4 +1,5 @@
 #include "markdown_preview.hpp"
+#include "theme.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -60,6 +61,53 @@ void tagged(GtkTextView* view, const char* word, const char* style) {
     check(locate(view, word, first, end), "styled cell text missing");
     auto tags = gtk_text_buffer_get_tag_table(gtk_text_view_get_buffer(view));
     check(gtk_text_iter_has_tag(&first, gtk_text_tag_table_lookup(tags, style)), style);
+}
+
+// Check the actual GTK paint, including the empty parts of each cell. Text
+// coordinates alone cannot distinguish a grid from tab-separated text.
+void check_grid(GtkTextView* view, const slate::Palette& palette) {
+    GtkTextIter first, end;
+    check(locate(view, "Head", first, end), "table heading missing");
+    gtk_text_iter_set_line_offset(&first, 0);
+    GdkRectangle start;
+    gtk_text_view_get_iter_location(view, &first, &start);
+    const auto header = geometry(view, "Head");
+    const auto data = geometry(view, "Item");
+    const auto shaded = geometry(view, "More");
+    const int width = gtk_widget_get_allocated_width(GTK_WIDGET(view));
+    const int height = gtk_widget_get_allocated_height(GTK_WIDGET(view));
+    auto surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+    auto* cr = cairo_create(surface);
+    gtk_widget_draw(GTK_WIDGET(view), cr);
+    cairo_destroy(cr);
+    cairo_surface_flush(surface);
+    const auto rgb = [&](int x, int y) {
+        int wx = 0, wy = 0;
+        gtk_text_view_buffer_to_window_coords(view, GTK_TEXT_WINDOW_WIDGET, x, y, &wx, &wy);
+        check(wx >= 0 && wx < width && wy >= 0 && wy < height, "expected table on screen");
+        const auto* row = cairo_image_surface_get_data(surface) + cairo_image_surface_get_stride(surface) * wy;
+        return reinterpret_cast<const std::uint32_t*>(row)[wx] & 0xffffffu;
+    };
+    const auto color = [](const std::string& hex) { return std::stoul(hex.substr(1), nullptr, 16); };
+    const auto border = color(palette.border);
+    const int x = start.x;
+    std::vector<int> edges;
+    for (int i = x; i < width - 20; ++i)
+        if (rgb(i, header.y - 1) == border) edges.push_back(i);
+    check(edges.size() == 3 && edges.front() == x, "two-column table has three painted vertical edges");
+    check(edges.back() + 12 < width, "short table has a bounded right edge");
+    for (auto edge : edges)
+        for (int y = header.y; y <= shaded.bottom; ++y)
+            check(rgb(edge, y) == border, "column rule is continuous across the header and body");
+    check(rgb(x + 3, header.y) == color(palette.raised), "header fill follows the palette");
+    check(rgb(x + 3, data.y) == color(palette.background), "first row uses the document background");
+    check(rgb(x + 3, shaded.y) == color(palette.surface), "alternate row uses the surface color");
+    check(rgb(edges.back() + 5, header.y) == color(palette.background), "header stops at the table edge");
+    int rules = 0;
+    for (int y = header.y; y < shaded.y; ++y)
+        if (rgb(x + 3, y) == border) ++rules;
+    check(rules == 2, "one horizontal rule separates each row");
+    cairo_surface_destroy(surface);
 }
 
 bool ready(const slate::MarkdownPreview& preview) {
@@ -126,6 +174,30 @@ void run() {
         if (gtk_widget_get_allocated_width(GTK_WIDGET(view)) > 500 || !ready(preview)) return false;
         return geometry(view, "endword").y - geometry(view, "First").y > wide_height;
     }, "narrowing the preview did not reflow the table");
+
+    show("| Head | Price |\n| :--- | ---: |\n| Item | 12 |\n| More | 30 |\n");
+    check_grid(view, slate::default_palette());
+    auto light = slate::default_palette(false);
+    light.border = "#8b6354";
+    light.raised = "#f4e9e4";
+    light.surface = "#fff6ef";
+    preview.set_palette(light);
+    auto last_paint = paints;
+    gtk_widget_queue_draw(GTK_WIDGET(view));
+    wait_until([&] { return paints > last_paint; }, "palette update was not painted");
+    check_grid(view, light);
+
+    show("| Description | Amount |\n| :--- | ---: |\n"
+         "| A long paragraph whose text wraps across several lines in this cell "
+         "while the last column ends on the first line. | 101 |\n| Small | 102 |\n");
+    check(std::abs(geometry(view, "101").right - geometry(view, "102").right) <= 2,
+          "right edge is independent of a soft line break in another cell");
+
+    show("| First | Last |\n| --- | --- |\n| char&#x2029;break&#x2028;here | intact |\n");
+    const auto escaped = geometry(view, "char");
+    const auto tail = geometry(view, "here");
+    check(escaped.y == tail.y && tail.right < geometry(view, "intact").x,
+          "embedded Unicode separators stay inside their cell");
 
     std::string header = "|", rule = "|", row = "|";
     for (int i = 0; i < 16; ++i) {

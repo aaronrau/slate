@@ -147,40 +147,6 @@ struct Folder {
     bool loading = false;
 };
 
-const char* style = R"CSS(
-#sidebar { background: #14171c; color: #c4cdd4; }
-#sidebar .workspace-heading { color: #98a4ad; font-size: 10px; font-weight: bold; letter-spacing: 1.4px; }
-#sidebar .workspace-refresh { background: transparent; color: #87939e; border: 0; box-shadow: none;
-  min-width: 20px; min-height: 20px; padding: 2px; }
-#sidebar .workspace-refresh:hover { color: #d7e4e7; background-color: #252c33; }
-#sidebar .workspace-search { background-image: none; background-color: #1b2026; color: #d7e0e6;
-  border: 1px solid #323a43; border-radius: 5px; box-shadow: none; min-height: 27px;
-  padding: 1px 7px; font-size: 12px; }
-#sidebar .workspace-search:focus { border-color: #669d94; }
-#sidebar .workspace-mode { background-image: none; background-color: transparent; color: #9ba6b0;
-  box-shadow: none; text-shadow: none; border: 1px solid transparent; border-radius: 4px;
-  font-size: 11px; min-height: 19px; min-width: 0; padding: 0 7px; }
-#sidebar .workspace-mode:hover { color: #e0e7eb; background: #20262b; }
-#sidebar .workspace-mode:checked { background: #23312f; color: #9ed8c8; border-color: #354843; }
-#sidebar .workspace-tree { background: #14171c; color: #cad2da; font-size: 12px; }
-#sidebar .workspace-tree:selected { background: #28383b; color: #ecf4f2; }
-#sidebar .workspace-tree.view { -GtkTreeView-vertical-separator: 7; -GtkTreeView-expander-size: 12; }
-#sidebar .workspace-tree:focus { outline-width: 0; }
-#sidebar .workspace-note { color: #9ba8b0; font-size: 11px; }
-)CSS";
-
-void install_style() {
-    static bool installed = false;
-    if (installed) return;
-    auto* provider = gtk_css_provider_new();
-    gtk_css_provider_load_from_data(provider, style, -1, nullptr);
-    gtk_style_context_add_provider_for_screen(gdk_screen_get_default(),
-                                              GTK_STYLE_PROVIDER(provider),
-                                              GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-    g_object_unref(provider);
-    installed = true;
-}
-
 } // namespace
 
 struct Workspace::Impl : std::enable_shared_from_this<Impl> {
@@ -229,7 +195,6 @@ struct Workspace::Impl : std::enable_shared_from_this<Impl> {
     }
 
     void build() {
-        install_style();
         box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
         g_object_ref_sink(box);
         gtk_widget_set_name(box, "sidebar");
@@ -580,7 +545,7 @@ struct Workspace::Impl : std::enable_shared_from_this<Impl> {
             const auto name = escape(display_path(hit.path.filename()));
             const auto detail = hit.length ? escape(hit.excerpt) : escape(rel);
             auto markup = name;
-            if (!detail.empty()) markup += "\n<span size='small' foreground='#97a5af'>" + detail + "</span>";
+            if (!detail.empty()) markup += "\n<span size='small'>" + detail + "</span>";
             auto tip = rel;
             if (hit.length) tip += " · byte " + std::to_string(hit.offset);
             append(results, nullptr, file_row, "text-x-generic-symbolic", markup, hit.path, tip,

@@ -6,6 +6,8 @@
 
 namespace slate {
 
+struct Palette;
+
 class MarkdownPreview {
 public:
     MarkdownPreview();
@@ -13,6 +15,7 @@ public:
     MarkdownPreview(const MarkdownPreview&) = delete;
     MarkdownPreview& operator=(const MarkdownPreview&) = delete;
     GtkWidget* widget() const;
+    void set_palette(const Palette& palette);
     void show(Document snapshot, std::uint64_t offset = 0, std::string fragment = {});
     void clear();
     void focus();
