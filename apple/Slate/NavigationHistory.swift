@@ -77,6 +77,8 @@ final class NavigationHistory: ObservableObject {
         guard let id = store.tabID(at: visit) else { return nil }
         return tab(id: id)
     }
+    func tabPage(starting index: Int) -> [Tab] { store.tabs(from: index, limit: Self.stripSize) }
+
     func tab(id: Int) -> Tab? {
         guard let tab = store.tabs(from: id, limit: 1).first, tab.id == id else { return nil }
         return tab

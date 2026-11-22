@@ -32,6 +32,13 @@
 			path = "Slate/EditorWindow.swift";
 			sourceTree = SOURCE_ROOT;
 		};
+		270D4CF0862338A63DA8EFA3 /* FilesSidebar.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			name = "FilesSidebar.swift";
+			path = "Slate/FilesSidebar.swift";
+			sourceTree = SOURCE_ROOT;
+		};
 		B690535561ADF1B2BACBFBD4 /* HistoryStore.swift */ = {
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
@@ -123,6 +130,13 @@
 			path = "SlateTests/SlateTests.swift";
 			sourceTree = SOURCE_ROOT;
 		};
+		611E71955F99A0D8B64A3AF4 /* FilesSidebarTests.swift */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			name = "FilesSidebarTests.swift";
+			path = "SlateSidebarUITests/FilesSidebarTests.swift";
+			sourceTree = SOURCE_ROOT;
+		};
 		8407F462D0288F2B01904B8E /* Info.plist */ = {
 			isa = PBXFileReference;
 			lastKnownFileType = text.plist.xml;
@@ -172,6 +186,13 @@
 			path = SlateTests.xctest;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};
+		6495CE81FE6CD48DB3919570 /* SlateSidebarUI.xctest */ = {
+			isa = PBXFileReference;
+			explicitFileType = wrapper.cfbundle;
+			includeInIndex = 0;
+			path = SlateSidebarUI.xctest;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
 		3E812CB1B98F5313CC71F316 /* Appearance.swift (build) */ = {
 			isa = PBXBuildFile;
 			fileRef = 04EB4315C98C4DA5EC603B94 /* Appearance.swift */;
@@ -187,6 +208,10 @@
 		797D39AF2785D3ECDCF96E96 /* EditorWindow.swift (build) */ = {
 			isa = PBXBuildFile;
 			fileRef = F1D920DEA384686992B05D39 /* EditorWindow.swift */;
+		};
+		FB53E303AF4070187FE87448 /* FilesSidebar.swift (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = 270D4CF0862338A63DA8EFA3 /* FilesSidebar.swift */;
 		};
 		ADED21509B4EBFC0282666F3 /* HistoryStore.swift (build) */ = {
 			isa = PBXBuildFile;
@@ -240,11 +265,16 @@
 			isa = PBXBuildFile;
 			fileRef = 4E5AC61AE412D217AEDC9CEB /* SlateTests.swift */;
 		};
+		E72E4267A429148C1137A4C0 /* FilesSidebarTests.swift (build) */ = {
+			isa = PBXBuildFile;
+			fileRef = 611E71955F99A0D8B64A3AF4 /* FilesSidebarTests.swift */;
+		};
 		FE0A091FDBFB3E9C31B7A1BD /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				2C245C75EBAD5098F6D9665D /* Slate.app */,
 				8A24395436CEBC24A6A2492D /* SlateTests.xctest */,
+				6495CE81FE6CD48DB3919570 /* SlateSidebarUI.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -256,6 +286,7 @@
 				9F7C6E99AC67991A2C0A633C /* Document.swift */,
 				DBDABCAB9C4EC7523A5E038C /* EditorModel.swift */,
 				F1D920DEA384686992B05D39 /* EditorWindow.swift */,
+				270D4CF0862338A63DA8EFA3 /* FilesSidebar.swift */,
 				B690535561ADF1B2BACBFBD4 /* HistoryStore.swift */,
 				3381B8085905AE3072C471C5 /* NavigationHistory.swift */,
 				26000CE80221DB67BF94E993 /* Preview.swift */,
@@ -290,6 +321,7 @@
 				2EEDE4F448FA2030D7384B82 /* Slate sources */,
 				50D0D8DD11A959484CB838E0 /* Shared */,
 				4E5AC61AE412D217AEDC9CEB /* SlateTests.swift */,
+				611E71955F99A0D8B64A3AF4 /* FilesSidebarTests.swift */,
 				FE0A091FDBFB3E9C31B7A1BD /* Products */,
 			);
 			sourceTree = "<group>";
@@ -302,6 +334,7 @@
 				EB4DEEC0D8183EE66AF118D6 /* Document.swift (build) */,
 				F54FE5988085D533374D93EA /* EditorModel.swift (build) */,
 				797D39AF2785D3ECDCF96E96 /* EditorWindow.swift (build) */,
+				FB53E303AF4070187FE87448 /* FilesSidebar.swift (build) */,
 				ADED21509B4EBFC0282666F3 /* HistoryStore.swift (build) */,
 				765ACA019FBE59796F32D1AC /* NavigationHistory.swift (build) */,
 				A33E3717F768575AA87D0CB5 /* Preview.swift (build) */,
@@ -353,6 +386,28 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		31E72099337648873D5D63BF /* SlateSidebarUI Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E72E4267A429148C1137A4C0 /* FilesSidebarTests.swift (build) */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A2A54B029281AD66BA0303E2 /* SlateSidebarUI Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		96A51692FD7D48E1297F6228 /* SlateSidebarUI Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		413C47AB74B3B741535D0E10 /* host proxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 98F54143AB4E86B28C3AFEE0 /* project */;
@@ -398,9 +453,26 @@
 			productReference = 8A24395436CEBC24A6A2492D /* SlateTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		A0EE2FC0D6AC405A1D1056A3 /* SlateSidebarUI */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9516DDD8BAA7496F9B8B9411 /* SlateSidebarUI configs */;
+			buildPhases = (
+				31E72099337648873D5D63BF /* SlateSidebarUI Sources */,
+				A2A54B029281AD66BA0303E2 /* SlateSidebarUI Frameworks */,
+				96A51692FD7D48E1297F6228 /* SlateSidebarUI Resources */,
+			);
+			buildRules = ();
+			dependencies = (
+				58A0DCC84F8D86FC1AFAD44D /* host dependency */,
+			);
+			name = SlateSidebarUI;
+			productName = SlateSidebarUI;
+			productReference = 6495CE81FE6CD48DB3919570 /* SlateSidebarUI.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		98F54143AB4E86B28C3AFEE0 /* project */ = {
 			isa = PBXProject;
-			attributes = { LastSwiftUpdateCheck = 1600; LastUpgradeCheck = 1600; BuildIndependentTargetsInParallel = 1; TargetAttributes = { 6D7E7A3D3570C8850964D0C0 = { TestTargetID = 26D7B218C9B5641B37DFDDC1; }; }; };
+			attributes = { LastSwiftUpdateCheck = 1600; LastUpgradeCheck = 1600; BuildIndependentTargetsInParallel = 1; TargetAttributes = { 6D7E7A3D3570C8850964D0C0 = { TestTargetID = 26D7B218C9B5641B37DFDDC1; }; A0EE2FC0D6AC405A1D1056A3 = { TestTargetID = 26D7B218C9B5641B37DFDDC1; }; }; };
 			buildConfigurationList = FA52021448A4AC7DE6CD200E /* project configs */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
@@ -413,6 +485,7 @@
 			targets = (
 				26D7B218C9B5641B37DFDDC1 /* Slate */,
 				6D7E7A3D3570C8850964D0C0 /* SlateTests */,
+				A0EE2FC0D6AC405A1D1056A3 /* SlateSidebarUI */,
 			);
 		};
 		CACD8F8D7E01D03300A42FA5 /* project Debug */ = {
@@ -566,6 +639,41 @@
 			buildConfigurations = (
 				D68EBC4114DB49FCCE996862 /* SlateTests Debug */,
 				4FC51086C8C7E70B82C49A10 /* SlateTests Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		5D2C4AC5E33C61A701DFE382 /* SlateSidebarUI Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"PRODUCT_NAME" = "SlateSidebarUI";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "org.slateeditor.SlateSidebarUI";
+				"TEST_TARGET_NAME" = "Slate";
+				"GENERATE_INFOPLIST_FILE" = "YES";
+				"CODE_SIGN_STYLE" = "Automatic";
+				"SUPPORTED_PLATFORMS" = "iphoneos iphonesimulator";
+				"SDKROOT" = "iphoneos";
+			};
+			name = Debug;
+		};
+		7D8644ED6D573F33F963A3A3 /* SlateSidebarUI Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"PRODUCT_NAME" = "SlateSidebarUI";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "org.slateeditor.SlateSidebarUI";
+				"TEST_TARGET_NAME" = "Slate";
+				"GENERATE_INFOPLIST_FILE" = "YES";
+				"CODE_SIGN_STYLE" = "Automatic";
+				"SUPPORTED_PLATFORMS" = "iphoneos iphonesimulator";
+				"SDKROOT" = "iphoneos";
+			};
+			name = Release;
+		};
+		9516DDD8BAA7496F9B8B9411 /* SlateSidebarUI configs */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5D2C4AC5E33C61A701DFE382 /* SlateSidebarUI Debug */,
+				7D8644ED6D573F33F963A3A3 /* SlateSidebarUI Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
