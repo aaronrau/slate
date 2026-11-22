@@ -1,0 +1,36 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'org.slate.editor'
+    compileSdk 35
+    ndkVersion '28.2.13676358'
+
+    defaultConfig {
+        applicationId 'org.slate.editor'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '1.0'
+        testInstrumentationRunner 'android.test.InstrumentationTestRunner'
+        ndk { abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64' }
+        externalNativeBuild.cmake { arguments '-DANDROID_STL=c++_static' }
+    }
+    externalNativeBuild.cmake {
+        path 'src/main/cpp/CMakeLists.txt'
+        version '3.22.1'
+    }
+    // Keep this directory as the root so unrelated mobile sources never enter the APK.
+    sourceSets.main.assets.srcDirs = [layout.buildDirectory.dir('generated/slateAssets')]
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    useLibrary 'android.test.runner', false
+    useLibrary 'android.test.base', false
+}
+
+def previewAssets = tasks.register('copyPreviewAssets', Sync) {
+    from(rootProject.file('../mobile/preview'))
+    into(layout.buildDirectory.dir('generated/slateAssets/preview'))
+}
+tasks.named('preBuild').configure { dependsOn(previewAssets) }

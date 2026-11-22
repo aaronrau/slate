@@ -1,0 +1,28 @@
+:root {
+  color-scheme: dark;
+  --background: #101010; --surface: #202020; --text: #e7e7e7;
+  --muted: #aaa; --accent: #ccc; --border: #525252;
+  background: var(--background); color: var(--text);
+  font: 1rem/1.55 -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+}
+body { margin: 0; }
+main { max-width: 68rem; padding: 1rem 1.25rem 2rem; margin: 0 auto; overflow-wrap: anywhere; }
+main > :first-child { margin-top: 0; }
+h1,h2,h3,h4,h5,h6 { line-height: 1.2; margin: 1.4em 0 .45em; }
+p, ol, ul, pre, blockquote, .table-scroll, .diagram { margin: .75em 0; }
+ol,ul { padding-inline-start: 1.6em; }
+a { color: var(--accent); }
+blockquote { margin-inline: 0; padding-inline-start: 1em; border-inline-start: .2em solid var(--border); color: var(--muted); }
+hr { border: 0; border-top: 1px solid var(--border); }
+code,pre { background: var(--surface); border-radius: .2rem; font-family: ui-monospace, monospace; }
+code { padding: .09em .23em; }
+pre { padding: .75em; overflow: auto; }
+pre code { padding: 0; }
+.table-scroll { max-width: 100%; overflow-x: auto; }
+table { border-collapse: collapse; min-width: min(100%, 20em); }
+td,th { padding: .4em .65em; border: 1px solid var(--border); text-align: start; vertical-align: top; min-width: 2.5em; }
+th,tbody tr:nth-child(even) { background: var(--surface); }
+.diagram { overflow: auto; }
+.diagram > svg { display: block; max-width: 100%; height: auto; background: transparent; }
+img { max-width: 100%; height: auto; }
+summary { color: var(--muted); cursor: pointer; }

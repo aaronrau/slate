@@ -1,13 +1,20 @@
 # Slate
 
-A small native desktop editor for Linux and macOS. Open a folder to browse its files in the left pane, or pass a file to open it directly. The C++20 document engine opens multi-gigabyte files without building a full text buffer or a line index. The compact menu bar groups file, edit, selection, search, and view commands above the document tab. Markdown opens as a formatted document with a one-click switch to the source editor.
+Slate is a native text editor for Linux, macOS, iPhone, iPad, and Android. All editions use the same C++20 document engine to open multi-gigabyte files without building a full text buffer or line index. File tabs and back/forward arrows let you revisit documents and resume editing.
 
-## Build and run
+## Apple and Android apps
 
-Slate requires GTK 3.24 and Pango 1.50 or later. On Debian or Ubuntu, install the development tools and GTK headers.
+- On **iPhone, iPad, and Mac**, open `apple/Slate.xcodeproj` in Xcode, select the **Slate** scheme, choose a simulator or **My Mac**, and run. For a physical iPhone or iPad, select your development team under Signing & Capabilities. SwiftUI supplies the shared UI, with native text editing on each platform.
+- For **Android**, open `android/` in Android Studio, or run `./gradlew :app:assembleDebug` from that directory with JDK 17 and the Android SDK installed. With a device or emulator connected, run `./gradlew :app:installDebug`. The debug APK is in `android/app/build/outputs/apk/debug/`.
+
+Choose a file or folder through the system picker. The native apps edit UTF-8 in pages around 64 KiB, and load an offline web preview on demand for Markdown tables and Mermaid. Pagination bounds the number of bytes sent to native text controls and the preview. Formatting constructs that cross a page boundary can render independently on each side. Document providers can require a local copy when a file cannot be read at arbitrary offsets.
+
+## GTK desktop build
+
+The GTK edition on Linux and macOS requires GTK 3.24, Pango 1.50 or later, and SQLite 3. On Debian or Ubuntu, install the development tools and headers.
 
 ```sh
-sudo apt install build-essential cmake pkg-config libgtk-3-dev
+sudo apt install build-essential cmake pkg-config libgtk-3-dev libsqlite3-dev
 ```
 
 On macOS, install the Xcode command-line tools and the GTK dependency through Homebrew. [Homebrew GTK 3 formula](https://formulae.brew.sh/formula/gtk%2B3)
@@ -41,6 +48,9 @@ sh packaging/install-mermaid.sh
 | New file / save / save as | Ctrl+N / Ctrl+S / Ctrl+Shift+S |
 | Find a file by name or relative path | Ctrl+P |
 | Find exact text in files on disk | Ctrl+Shift+F |
+| Go back / forward in file history | Alt+Left / Alt+Right |
+| Previous / next open tab | Ctrl+Page Up / Ctrl+Page Down |
+| Close the current tab | Ctrl+F4 |
 | Select / extend selection / select a word | Drag / Shift+click / double-click |
 | Copy / cut / paste / select all | Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+A |
 | Undo / redo | Ctrl+Z / Ctrl+Shift+Z |
@@ -49,6 +59,8 @@ sh packaging/install-mermaid.sh
 | Close the window | Ctrl+W |
 
 Right-click a selection for the edit menu. Use Command for the primary shortcuts on macOS. In the sidebar, press Enter to open the first search result or click a result to select it. Content hits select the matching bytes. Escape in the search field clears the query and restores the directory tree. Use the refresh button to pick up filesystem changes.
+
+Click the arrows on the tab strip to retrace your file visits, or click a filename to jump directly to that tab. Opening another file after going back starts a new forward path. The GTK edition remembers history across launches for each workspace. It stores paths and positions in a local SQLite database and loads a small group of adjacent tab buttons. History has no preset visit limit.
 
 Open **Edit → Appearance…** with **Ctrl+,** on Linux or **Command+,** on macOS. Choose Dark or Light and adjust the document background, panels, text, secondary text, accents, or code color. Changes preview immediately. **Save** remembers the colors for each mode, and **Cancel** restores the previous appearance.
 

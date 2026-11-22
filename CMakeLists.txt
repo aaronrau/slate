@@ -9,6 +9,7 @@ if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
 endif()
 
 find_package(Threads REQUIRED)
+find_package(SQLite3 REQUIRED)
 find_package(PkgConfig REQUIRED)
 include(GNUInstallDirs)
 pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0>=3.24 pango>=1.50)
@@ -35,16 +36,41 @@ if(FONTCONFIG_FOUND)
   target_link_libraries(slate_widgets PRIVATE PkgConfig::FONTCONFIG)
   target_compile_definitions(slate_widgets PRIVATE SLATE_HAVE_FONTCONFIG=1)
 endif()
-add_executable(slate src/main.cpp)
-target_link_libraries(slate PRIVATE slate_widgets)
+find_program(GLIB_COMPILE_RESOURCES glib-compile-resources)
+if(NOT GLIB_COMPILE_RESOURCES)
+  message(FATAL_ERROR "Building the Slate icon requires glib-compile-resources")
+endif()
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/slate-icons.c"
+  COMMAND "${GLIB_COMPILE_RESOURCES}" --generate-source --c-name=slate_icons
+          "--sourcedir=${CMAKE_CURRENT_SOURCE_DIR}/packaging"
+          "--target=${CMAKE_CURRENT_BINARY_DIR}/slate-icons.c"
+          "${CMAKE_CURRENT_SOURCE_DIR}/packaging/icons.gresource.xml"
+  DEPENDS packaging/icons.gresource.xml packaging/slate-editor.png
+  VERBATIM)
+add_library(slate_history src/file_history.cpp)
+target_include_directories(slate_history PUBLIC src)
+target_link_libraries(slate_history PRIVATE SQLite::SQLite3)
+add_executable(slate src/main.cpp "${CMAKE_CURRENT_BINARY_DIR}/slate-icons.c")
+target_link_libraries(slate PRIVATE slate_widgets slate_history)
 install(TARGETS slate RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   install(FILES packaging/slate.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+  install(FILES packaging/slate-editor.svg DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+  install(FILES packaging/slate-editor.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps)
 endif()
 install(FILES third_party/md4c/LICENSE.md DESTINATION share/licenses/slate RENAME md4c-LICENSE.md)
 
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(file_history_test tests/file_history_test.cpp)
+  target_link_libraries(file_history_test PRIVATE slate_history)
+  add_test(NAME file_history COMMAND file_history_test)
+
+  add_executable(mobile_document_test tests/mobile_document_test.cpp mobile/core/slate_document.cpp)
+  target_include_directories(mobile_document_test PRIVATE mobile/core)
+  target_link_libraries(mobile_document_test PRIVATE slate_core)
+  add_test(NAME mobile_document COMMAND mobile_document_test)
+
   add_executable(appearance_test tests/appearance_test.cpp)
   target_link_libraries(appearance_test PRIVATE slate_widgets)
 

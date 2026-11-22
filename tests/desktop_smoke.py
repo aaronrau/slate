@@ -40,7 +40,8 @@ def exercise(binary, directory):
     with huge.open("wb") as stream:
         stream.seek(5 * 1024**3)
         stream.write(b"\nTAIL\n")
-    proc = subprocess.Popen([binary, first], env=dict(os.environ, G_DEBUG="fatal-criticals"))
+    env = dict(os.environ, G_DEBUG="fatal-criticals", XDG_DATA_HOME=str(directory / ".app-data"))
+    proc = subprocess.Popen([binary, first], env=env)
     try:
         wait_for(lambda: xdo("search", "--onlyvisible", "--name", "^start.md"), "No window")
         window = xdo("search", "--onlyvisible", "--name", "^start.md").splitlines()[0]
@@ -84,6 +85,10 @@ def exercise(binary, directory):
                 return False
             wait_for(activate_result, f"Could not open search result for {query}")
 
+        def at_file(filename):
+            wait_for(lambda: xdo("getwindowname", window).startswith(filename),
+                     f"Expected active file {filename}")
+
         search("ctrl+shift+f", "MARKER", target.name)
         type_text("found")
         save_and_check(lambda: target.read_bytes() == b"before found after\n")
@@ -95,8 +100,38 @@ def exercise(binary, directory):
                 stream.seek(-4, 2)
                 return stream.read() == b"last"
         save_and_check(tail_saved)
+        key("alt+Left")
+        at_file(target.name)
+        type_text("!")
+        # A canceled navigation must preserve unsaved text and the forward visit.
+        key("alt+Right")
+        time.sleep(.12)
+        key("Escape")
+        at_file(target.name)
+        save_and_check(lambda: target.read_bytes() == b"before found! after\n")
+        key("alt+Right")
+        at_file(huge.name)
+        # Both arrow buttons and the filename tabs are actionable in the strip.
+        xdo("mousemove", "--window", window, "246", "40", "click", "1")
+        at_file(target.name)
+        xdo("mousemove", "--window", window, "325", "40", "click", "1")
+        at_file(first.name)
+        key("ctrl+Page_Down")
+        at_file(target.name)
+        key("ctrl+F4")
+        at_file(first.name)
+        key("ctrl+Page_Down")
+        at_file(huge.name)
         key("ctrl+a", "Delete")
         save_and_check(lambda: huge.stat().st_size == 0)
+        key("ctrl+w")
+        assert proc.wait(timeout=5) == 0
+        proc = subprocess.Popen([binary, directory], env=env)
+        wait_for(lambda: xdo("search", "--onlyvisible", "--name", "^huge.log"), "History failed to reopen")
+        window = xdo("search", "--onlyvisible", "--name", "^huge.log").splitlines()[0]
+        xdo("windowfocus", "--sync", window)
+        key("alt+Left")
+        at_file(first.name)
         key("ctrl+w")
         assert proc.wait(timeout=5) == 0
     finally:
