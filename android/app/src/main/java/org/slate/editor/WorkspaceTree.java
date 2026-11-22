@@ -36,12 +36,14 @@ final class WorkspaceTree implements AutoCloseable {
         final Workspace workspace;
         final Uri uri;
         final boolean folder;
+        final Node parent;
         String name;
         boolean expanded, more, failed, named;
         int skip;
         List<Node> children;
         CancellationSignal request;
-        Node(Workspace workspace, Uri uri, String name, boolean folder) {
+        Node(Node parent, Workspace workspace, Uri uri, String name, boolean folder) {
+            this.parent = parent;
             this.workspace = workspace;
             this.uri = uri;
             this.name = name;
@@ -58,6 +60,7 @@ final class WorkspaceTree implements AutoCloseable {
         pane = new LinearLayout(ui);
         pane.setOrientation(LinearLayout.VERTICAL);
         pane.setClickable(true);
+        pane.setFocusableInTouchMode(true);
         pane.setContentDescription("Files pane");
         title = new TextView(ui);
         title.setText("Files");
@@ -196,14 +199,14 @@ final class WorkspaceTree implements AutoCloseable {
         Workspace ws = folder ? new Workspace(ui.getContentResolver(), grant) : null;
         Uri document = folder ? ws.root : grant;
         String cached = prefs.getString("label/" + grant, null);
-        Node n = node(ws, document, name != null ? name : cached != null ? cached : fallbackName(grant, folder), folder);
+        Node n = node(null, ws, document, name != null ? name : cached != null ? cached : fallbackName(grant, folder), folder);
         n.named = name != null || cached != null;
         grants.put(grant, n);
         return n;
     }
 
-    private Node node(Workspace workspace, Uri uri, String name, boolean folder) {
-        Node n = new Node(workspace, uri, name, folder);
+    private Node node(Node parent, Workspace workspace, Uri uri, String name, boolean folder) {
+        Node n = new Node(parent, workspace, uri, name, folder);
         if (folder) {
             n.expanded = prefs.getBoolean("expanded/" + uri, false);
             n.skip = prefs.getInt("page/" + uri, 0);
@@ -313,6 +316,11 @@ final class WorkspaceTree implements AutoCloseable {
         rebuild();
     }
 
+    private boolean ancestor(Node parent, Uri uri) {
+        for (Node n = parent; n != null; n = n.parent) if (n.uri.equals(uri)) return true;
+        return false;
+    }
+
     private void load(Node parent) {
         if (!visible || parent.request != null || parent.failed || closed) return;
         CancellationSignal request = new CancellationSignal();
@@ -325,8 +333,10 @@ final class WorkspaceTree implements AutoCloseable {
                     if (closed || parent.request != request) return;
                     parent.request = null;
                     parent.children = new ArrayList<>(page.entries().size());
-                    for (Workspace.Entry e : page.entries())
-                        parent.children.add(node(parent.workspace, e.uri(), e.name(), e.directory()));
+                    for (Workspace.Entry e : page.entries()) {
+                        if (e.directory() && ancestor(parent, e.uri())) continue;
+                        parent.children.add(node(parent, parent.workspace, e.uri(), e.name(), e.directory()));
+                    }
                     parent.more = page.more();
                     rebuild();
                 });

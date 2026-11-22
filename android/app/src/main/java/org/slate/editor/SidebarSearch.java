@@ -56,6 +56,12 @@ final class SidebarSearch implements AutoCloseable {
         query.setGravity(Gravity.CENTER_VERTICAL);
         input = new EditText(ui);
         input.setSingleLine(true);
+        input.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
+        input.setOnEditorActionListener((v, action, event) -> {
+            if (action != android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) return false;
+            ((InputMethodManager)ui.getSystemService(Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(input.getWindowToken(), 0);
+            return true;
+        });
         input.setHint("Search files");
         input.setContentDescription("Search files");
         query.addView(input, new LinearLayout.LayoutParams(0, ui.dp(48), 1));

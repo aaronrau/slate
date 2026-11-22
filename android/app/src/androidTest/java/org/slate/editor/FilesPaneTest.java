@@ -69,6 +69,24 @@ public final class FilesPaneTest extends ActivityInstrumentationTestCase2<MainAc
         });
     }
 
+    private int hit(long offset) {
+        ListView matches = (ListView)view("Search results");
+        if (matches == null) return -1;
+        for (int i = 0; i < matches.getCount(); i++) {
+            Workspace.Entry e = (Workspace.Entry)matches.getItemAtPosition(i);
+            if (e.path().endsWith("nested/entry.txt") && e.offset() == offset) return i;
+        }
+        return -1;
+    }
+
+    private void waitForHit(long offset) throws Exception {
+        await("recursive search result at " + offset, () -> {
+            AtomicReference<Boolean> found = new AtomicReference<>(false);
+            getInstrumentation().runOnMainSync(() -> found.set(hit(offset) >= 0));
+            return found.get();
+        });
+    }
+
     private void shell(String command) throws IOException {
         ParcelFileDescriptor fd = getInstrumentation().getUiAutomation().executeShellCommand(command);
         try (InputStream in = new ParcelFileDescriptor.AutoCloseInputStream(fd)) {
@@ -153,6 +171,27 @@ public final class FilesPaneTest extends ActivityInstrumentationTestCase2<MainAc
                 return closed.get();
             });
             main(() -> view("Files").performClick());
+            waitForView("entry.txt, current file");
+            main(() -> { ((EditText)view("Search files")).setText("entry.txt"); return null; });
+            waitForHit(-1);
+            main(() -> {
+                ((RadioButton)view("Search file contents")).setChecked(true);
+                ((EditText)view("Search files")).setText("localhost");
+                return null;
+            });
+            byte[] hosts = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get("/system/etc/hosts"));
+            long match = new String(hosts, java.nio.charset.StandardCharsets.UTF_8).indexOf("localhost");
+            assertTrue(match >= 0);
+            waitForHit(match);
+            main(() -> {
+                ListView results = (ListView)view("Search results");
+                int i = hit(match);
+                return results.performItemClick(null, i, results.getItemIdAtPosition(i));
+            });
+            waitForView("Files");
+            main(() -> view("Files").performClick());
+            waitForView("Clear search");
+            main(() -> view("Clear search").performClick());
             waitForView("entry.txt, current file");
             tapRow("nested, expanded folder");
             assertNull(main(() -> view("entry.txt, current file")));

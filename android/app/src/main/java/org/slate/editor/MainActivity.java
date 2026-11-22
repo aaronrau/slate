@@ -66,7 +66,7 @@ public final class MainActivity extends Activity {
         Navigation.Place last = navigation.relative(0);
         if (state == null && launch != null && "content".equals(launch.getScheme())) {
             persist(launch, getIntent());
-            requestOpen(launch, -1, 0, null);
+            requestOpen(launch, -1, 0, null, false, true);
         } else if ((state == null || !state.getBoolean("untitled")) && last != null) {
             followHistory(last, -1);
         }
@@ -248,6 +248,7 @@ public final class MainActivity extends Activity {
             ((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(editor.getWindowToken(), 0);
         drawerOpen = open;
         layoutFiles(workspaceFrame.getWidth() > 0 ? workspaceFrame.getWidth() : getResources().getDisplayMetrics().widthPixels);
+        if (open && !wide) workspace.view().requestFocus();
     }
 
     void showFiles() { setDrawerOpen(true); }
@@ -680,7 +681,9 @@ public final class MainActivity extends Activity {
     private void write(Uri destination, Runnable after) {
         remember();
         long position = caret();
+        boolean newTarget = !destination.equals(file.uri);
         runIO("Saving file…", () -> { file.save(this, destination); return true; }, ignored -> {
+            if (newTarget) workspace.openedFile(destination, file.name);
             navigation.visit(destination, file.name, position, previewing);
             updateTabs();
             refresh();
