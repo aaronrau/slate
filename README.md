@@ -117,7 +117,7 @@ cmake --build build --target slate_bench
 
 The benchmark creates and removes a temporary 1 GiB dense log file and 50,000 directory entries. Pass a size in GiB to change the workload, for example `./build/slate_bench 5`. Allow about 2.1 GiB of free disk space for the default workload, or just over twice the requested file size. It reports warm-cache timings and peak resident memory for the standalone engine process.
 
-Tests cover randomized document edits, snapshot saves, modified files on disk, UTF-8 and CRLF segment boundaries, 64-bit offsets, and sparse files over 5 GiB. On Linux, install `xvfb`, `xauth`, `xdotool`, and Python 3 before configuring to include an end-to-end desktop test. It copies rendered text through the menu, switches to Source, types into the window, opens search results, and edits and saves beyond 5 GiB. Renderer tests exercise semantic tags, images, links, current edits, cancellation, and the final page of a file beyond 5 GiB. The included CI workflow builds and runs the applicable tests on Linux and macOS.
+Tests cover randomized document edits, snapshot saves, modified files on disk, UTF-8 and CRLF segment boundaries, 64-bit offsets, and sparse files over 5 GiB. On Linux, install `xvfb`, `xauth`, `xdotool`, and Python 3 before configuring to include an end-to-end desktop test. It copies rendered text through the menu, switches to Source, types into the window, opens search results, and edits and saves beyond 5 GiB. Renderer tests exercise semantic tags, images, links, current edits, cancellation, and the final page of a file beyond 5 GiB.
 
 ## Measured performance
 
